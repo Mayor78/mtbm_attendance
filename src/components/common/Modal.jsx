@@ -19,15 +19,34 @@ const Modal = ({
 }) => {
   const [isVisible, setIsVisible] = useState(false);
 
-  // Handle modal visibility animation
+  // Handle modal visibility animation and body overflow
   useEffect(() => {
     if (isOpen) {
       setIsVisible(true);
+      // Save the original overflow value
+      const originalOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
+      document.documentElement.style.overflow = 'hidden';
+      
+      // Store original value to restore later
+      return () => {
+        document.body.style.overflow = originalOverflow || 'auto';
+        document.documentElement.style.overflow = 'auto';
+      };
     } else {
-      const timer = setTimeout(() => setIsVisible(false), 300);
-      document.body.style.overflow = 'unset';
-      return () => clearTimeout(timer);
+      const timer = setTimeout(() => {
+        setIsVisible(false);
+        // Ensure body overflow is restored when modal closes
+        document.body.style.overflow = 'auto';
+        document.documentElement.style.overflow = 'auto';
+      }, 300);
+      
+      return () => {
+        clearTimeout(timer);
+        // Also restore on cleanup
+        document.body.style.overflow = 'auto';
+        document.documentElement.style.overflow = 'auto';
+      };
     }
   }, [isOpen]);
 
@@ -42,6 +61,14 @@ const Modal = ({
     document.addEventListener('keydown', handleEsc);
     return () => document.removeEventListener('keydown', handleEsc);
   }, [closeOnEsc, isOpen, onClose]);
+
+  // Additional safety: restore overflow on unmount
+  useEffect(() => {
+    return () => {
+      document.body.style.overflow = 'auto';
+      document.documentElement.style.overflow = 'auto';
+    };
+  }, []);
 
   if (!isVisible && !isOpen) return null;
 
@@ -98,7 +125,12 @@ const Modal = ({
           </h3>
           {showCloseButton && (
             <button
-              onClick={onClose}
+              onClick={() => {
+                onClose();
+                // Immediate overflow restoration
+                document.body.style.overflow = 'auto';
+                document.documentElement.style.overflow = 'auto';
+              }}
               className="text-gray-400 hover:text-gray-600 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg p-1"
               aria-label="Close modal"
             >
@@ -289,11 +321,20 @@ export const SlideOver = ({
     if (isOpen) {
       setIsVisible(true);
       document.body.style.overflow = 'hidden';
+      document.documentElement.style.overflow = 'hidden';
     } else {
-      const timer = setTimeout(() => setIsVisible(false), 300);
-      document.body.style.overflow = 'unset';
+      const timer = setTimeout(() => {
+        setIsVisible(false);
+        document.body.style.overflow = 'auto';
+        document.documentElement.style.overflow = 'auto';
+      }, 300);
       return () => clearTimeout(timer);
     }
+    
+    return () => {
+      document.body.style.overflow = 'auto';
+      document.documentElement.style.overflow = 'auto';
+    };
   }, [isOpen]);
 
   if (!isVisible && !isOpen) return null;
@@ -323,7 +364,11 @@ export const SlideOver = ({
     <>
       <div
         className={overlayClasses}
-        onClick={onClose}
+        onClick={() => {
+          onClose();
+          document.body.style.overflow = 'auto';
+          document.documentElement.style.overflow = 'auto';
+        }}
         aria-hidden="true"
       />
       
@@ -333,7 +378,11 @@ export const SlideOver = ({
           <h3 className="text-lg font-semibold text-gray-800">{title}</h3>
           {showCloseButton && (
             <button
-              onClick={onClose}
+              onClick={() => {
+                onClose();
+                document.body.style.overflow = 'auto';
+                document.documentElement.style.overflow = 'auto';
+              }}
               className="text-gray-400 hover:text-gray-600 transition-colors"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -32,10 +32,16 @@ const StudentDashboard = () => {
   };
 
   const handleAttendanceSuccess = (message) => {
+    // Close modals first
     setShowQRScanner(false);
     setShowCodeInput(false);
+    
+    // Show toast
     handleShowToast(message || 'Attendance marked successfully!', 'success');
+    
+     setTimeout(() => {
     refetch();
+  }, 500);
   };
 
   const handleAttendanceError = (err) => {

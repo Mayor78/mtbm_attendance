@@ -454,11 +454,7 @@ export const HocDashboard = () => {
   </div>
 </div>
 
-{/* Today's attendance badge
-<div className="mt-2 flex items-center justify-between text-xs">
-  <span className="text-slate-400">Today's attendance:</span>
-  <span className="font-bold text-indigo-600">{course.todayAttendance} students</span>
-</div> */}
+
 
                   <Link 
                     to={`/course/${course.id}/attendance`}

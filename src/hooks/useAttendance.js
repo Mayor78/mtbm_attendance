@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+
 
 
 export const useStudentAttendance = (userId) => {
@@ -11,15 +12,31 @@ export const useStudentAttendance = (userId) => {
     attended: 0,
     percentage: 0
   });
+  
+  // Add a ref to track if component is mounted
+  const isMounted = useRef(true);
+  // Add a ref to prevent multiple simultaneous fetches
+  const isFetching = useRef(false);
 
   useEffect(() => {
+    isMounted.current = true;
+    
     if (userId) {
       console.log('🟢 useStudentAttendance hook triggered for user:', userId);
       fetchStudentAttendance();
     }
-  }, [userId]);
+    
+    return () => {
+      isMounted.current = false;
+    };
+  }, [userId]); // Remove fetchStudentAttendance from dependencies
 
-  const fetchStudentAttendance = async () => {
+  const fetchStudentAttendance = useCallback(async () => {
+    // Prevent multiple simultaneous fetches
+    if (isFetching.current || !userId) return;
+    
+    isFetching.current = true;
+    
     try {
       setLoading(true);
       setError('');
@@ -66,28 +83,37 @@ export const useStudentAttendance = (userId) => {
       );
 
       console.log('✅ Enriched records:', enrichedRecords);
-      setRecords(enrichedRecords);
+      
+      // Only update state if component is still mounted
+      if (isMounted.current) {
+        setRecords(enrichedRecords);
 
-      // Calculate stats
-      const totalSessions = await getTotalSessions(student.id);
-      const attended = enrichedRecords.length;
-      const percentage = totalSessions > 0 
-        ? Math.round((attended / totalSessions) * 100 * 10) / 10 
-        : 0;
+        // Calculate stats
+        const totalSessions = await getTotalSessions(student.id);
+        const attended = enrichedRecords.length;
+        const percentage = totalSessions > 0 
+          ? Math.round((attended / totalSessions) * 100 * 10) / 10 
+          : 0;
 
-      setStats({
-        totalClasses: totalSessions,
-        attended: attended,
-        percentage: percentage
-      });
+        setStats({
+          totalClasses: totalSessions,
+          attended: attended,
+          percentage: percentage
+        });
+      }
 
     } catch (error) {
       console.error('❌ Error:', error);
-      setError(error.message);
+      if (isMounted.current) {
+        setError(error.message);
+      }
     } finally {
-      setLoading(false);
+      if (isMounted.current) {
+        setLoading(false);
+      }
+      isFetching.current = false;
     }
-  };
+  }, [userId]);
 
   const getTotalSessions = async (studentId) => {
     try {
@@ -108,7 +134,7 @@ export const useStudentAttendance = (userId) => {
         .from('attendance_sessions')
         .select('*', { count: 'exact', head: true })
         .in('course_id', courseIds)
-        .lt('expires_at', new Date().toISOString()); // Only count expired sessions
+        .lt('expires_at', new Date().toISOString());
 
       if (countError) throw countError;
       
@@ -119,7 +145,14 @@ export const useStudentAttendance = (userId) => {
     }
   };
 
-  return { records, loading, error, stats, refetch: fetchStudentAttendance };
+  // Memoize refetch to prevent unnecessary re-renders
+  const refetch = useCallback(() => {
+    if (!isFetching.current) {
+      fetchStudentAttendance();
+    }
+  }, [fetchStudentAttendance]);
+
+  return { records, loading, error, stats, refetch };
 };
 
 
@@ -312,7 +345,7 @@ export const useCourseAttendance = (courseId) => {
 
       const sessionIds = sessionsData.map(s => s.id);
       
-      // Get attendance records from the view
+      // Get attendance records from the view (now includes location fields)
       const { data: recordsData, error: recordsError } = await supabase
         .from('attendance_with_students')
         .select('*')
@@ -320,23 +353,26 @@ export const useCourseAttendance = (courseId) => {
 
       if (recordsError) throw recordsError;
 
-      console.log('Raw view data:', recordsData); // Check the structure
+      console.log('Raw view data with location:', recordsData);
 
-      // Group records by session with correct data structure
+      // Group records by session with ALL data including location
       const recordsBySession = {};
       recordsData?.forEach(record => {
         if (!recordsBySession[record.session_id]) {
           recordsBySession[record.session_id] = [];
         }
         
-        // The view gives us full_name directly at the top level
         recordsBySession[record.session_id].push({
           id: record.record_id,
           scanned_at: record.scanned_at,
           session_id: record.session_id,
           student_id: record.student_id,
-          student_name: record.full_name, // Direct access to full_name
-          matric_no: record.matric_no
+          student_name: record.full_name,
+          matric_no: record.matric_no,
+          location_lat: record.location_lat,
+          location_lng: record.location_lng,
+          location_accuracy: record.location_accuracy,
+          device_info: record.device_info
         });
       });
 
