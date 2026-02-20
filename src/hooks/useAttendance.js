@@ -13,9 +13,7 @@ export const useStudentAttendance = (userId) => {
     percentage: 0
   });
   
-  // Add a ref to track if component is mounted
   const isMounted = useRef(true);
-  // Add a ref to prevent multiple simultaneous fetches
   const isFetching = useRef(false);
 
   useEffect(() => {
@@ -29,10 +27,9 @@ export const useStudentAttendance = (userId) => {
     return () => {
       isMounted.current = false;
     };
-  }, [userId]); // Remove fetchStudentAttendance from dependencies
+  }, [userId]);
 
   const fetchStudentAttendance = useCallback(async () => {
-    // Prevent multiple simultaneous fetches
     if (isFetching.current || !userId) return;
     
     isFetching.current = true;
@@ -43,10 +40,10 @@ export const useStudentAttendance = (userId) => {
       
       console.log('📡 Fetching student attendance for user:', userId);
 
-      // Get student ID
+      // Get student ID with department and level
       const { data: student, error: studentError } = await supabase
         .from('students')
-        .select('id')
+        .select('id, department, level')
         .eq('user_id', userId)
         .single();
 
@@ -54,53 +51,53 @@ export const useStudentAttendance = (userId) => {
       
       console.log('✅ Student found:', student);
 
-      // Get attendance records
+      // Get attendance records for this student
       const { data: recordsData, error } = await supabase
         .from('attendance_records')
-        .select('*')
+        .select(`
+          id,
+          scanned_at,
+          session_id,
+          attendance_sessions (
+            id,
+            course_id,
+            courses (
+              course_code,
+              course_title,
+              department,
+              level
+            )
+          )
+        `)
         .eq('student_id', student.id);
 
       if (error) throw error;
 
       console.log('📊 Attendance records:', recordsData);
 
-      // Get session details for each record
-      const enrichedRecords = await Promise.all(
-        (recordsData || []).map(async (record) => {
-          const { data: session } = await supabase
-            .from('attendance_sessions')
-            .select('*, courses(*)')
-            .eq('id', record.session_id)
-            .single();
-          
-          return {
-            id: record.id,
-            scanned_at: record.scanned_at,
-            created_at: record.created_at,
-            attendance_sessions: session
-          };
-        })
-      );
+      // Filter records to only include courses matching student's department/level
+      const validRecords = (recordsData || []).filter(record => {
+        const course = record.attendance_sessions?.courses;
+        return course && 
+               course.department === student.department && 
+               course.level === student.level;
+      });
 
-      console.log('✅ Enriched records:', enrichedRecords);
-      
-      // Only update state if component is still mounted
-      if (isMounted.current) {
-        setRecords(enrichedRecords);
+      console.log('✅ Valid records after filtering:', validRecords);
+      setRecords(validRecords);
 
-        // Calculate stats
-        const totalSessions = await getTotalSessions(student.id);
-        const attended = enrichedRecords.length;
-        const percentage = totalSessions > 0 
-          ? Math.round((attended / totalSessions) * 100 * 10) / 10 
-          : 0;
+      // Calculate stats
+      const totalSessions = await getTotalSessions(student.id, student.department, student.level);
+      const attended = validRecords.length;
+      const percentage = totalSessions > 0 
+        ? Math.round((attended / totalSessions) * 100 * 10) / 10 
+        : 0;
 
-        setStats({
-          totalClasses: totalSessions,
-          attended: attended,
-          percentage: percentage
-        });
-      }
+      setStats({
+        totalClasses: totalSessions,
+        attended: attended,
+        percentage: percentage
+      });
 
     } catch (error) {
       console.error('❌ Error:', error);
@@ -115,13 +112,21 @@ export const useStudentAttendance = (userId) => {
     }
   }, [userId]);
 
-  const getTotalSessions = async (studentId) => {
+  const getTotalSessions = async (studentId, department, level) => {
     try {
-      // Get student's enrolled courses
+      // Get student's enrolled courses (filtered by department/level)
       const { data: enrollments, error: enrollError } = await supabase
         .from('course_enrollments')
-        .select('course_id')
-        .eq('student_id', studentId);
+        .select(`
+          course_id,
+          courses!inner (
+            department,
+            level
+          )
+        `)
+        .eq('student_id', studentId)
+        .eq('courses.department', department)
+        .eq('courses.level', level);
 
       if (enrollError) throw enrollError;
       
@@ -145,47 +150,240 @@ export const useStudentAttendance = (userId) => {
     }
   };
 
-  // Memoize refetch to prevent unnecessary re-renders
-  const refetch = useCallback(() => {
-    if (!isFetching.current) {
-      fetchStudentAttendance();
-    }
-  }, [fetchStudentAttendance]);
-
-  return { records, loading, error, stats, refetch };
+  return { records, loading, error, stats, refetch: fetchStudentAttendance };
 };
 
+
+// Batch processor for real-time updates
+const useBatchProcessor = (batchInterval = 100) => {
+  const batchRef = useRef([]);
+  const timeoutRef = useRef();
+
+  const addToBatch = useCallback((item) => {
+    batchRef.current.push(item);
+    
+    clearTimeout(timeoutRef.current);
+    return new Promise(resolve => {
+      timeoutRef.current = setTimeout(() => {
+        const batch = [...batchRef.current];
+        batchRef.current = [];
+        resolve(batch);
+      }, batchInterval);
+    });
+  }, [batchInterval]);
+
+  return { addToBatch };
+};
+
+// Retry utility with exponential backoff
+const executeWithRetry = async (fn, maxRetries = 3) => {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err?.code === '53300' || err?.message?.includes('too many connections')) {
+        const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Max retries exceeded');
+};
 
 export const useHOCAttendance = (userId) => {
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [activeSessions, setActiveSessions] = useState({});
+  const [liveActivity, setLiveActivity] = useState([]);
+  const [stats, setStats] = useState({
+    totalStudents: 0,
+    totalCourses: 0,
+    activeSessions: 0
+  });
 
+  const { addToBatch } = useBatchProcessor(100);
+  const mountedRef = useRef(true);
+  const channelRef = useRef(null);
+  const fetchAttemptedRef = useRef(false);
+
+  // Cleanup on unmount
   useEffect(() => {
-    if (userId) {
+    mountedRef.current = true;
+    fetchAttemptedRef.current = false;
+    
+    return () => {
+      mountedRef.current = false;
+      if (channelRef.current) {
+        channelRef.current.unsubscribe();
+      }
+    };
+  }, []);
+
+  // Fetch data when userId changes
+  useEffect(() => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+    
+    if (!fetchAttemptedRef.current) {
+      fetchAttemptedRef.current = true;
       fetchHOCAttendance();
     }
   }, [userId]);
 
-  const fetchHOCAttendance = async () => {
+  // Set up real-time subscription
+  useEffect(() => {
+    if (!courses.length || !Object.keys(activeSessions).length) return;
+
+    const activeSessionIds = Object.values(activeSessions).map(s => s.id);
+    
+    // Single channel for all updates
+    channelRef.current = supabase
+      .channel('attendance-all')
+      .on(
+        'postgres_changes',
+        { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'attendance_records' 
+        },
+        async (payload) => {
+          // Client-side filtering
+          if (!activeSessionIds.includes(payload.new.session_id)) return;
+
+          try {
+            // Fetch student data with retry
+            const studentData = await executeWithRetry(async () => {
+              const { data, error } = await supabase
+                .from('students')
+                .select(`
+                  id,
+                  matric_no,
+                  department,
+                  level,
+                  profiles (
+                    full_name
+                  )
+                `)
+                .eq('id', payload.new.student_id)
+                .single();
+              
+              if (error) throw error;
+              return data;
+            });
+
+            if (!mountedRef.current) return;
+
+            // Find course
+            const course = courses.find(c => 
+              c.sessions?.some(s => s.id === payload.new.session_id)
+            );
+
+            if (!course) return;
+
+            // Batch the update
+            const batch = await addToBatch({
+              record: payload.new,
+              studentData,
+              courseCode: course.course_code
+            });
+
+            if (!mountedRef.current) return;
+
+            // Process batch updates
+            setCourses(prev => {
+              const newCourses = [...prev];
+              
+              batch.forEach(({ record, studentData }) => {
+                const courseIndex = newCourses.findIndex(c => 
+                  c.sessions?.some(s => s.id === record.session_id)
+                );
+                
+                if (courseIndex !== -1) {
+                  const uniqueStudents = new Set([
+                    ...(newCourses[courseIndex].attendanceRecords?.map(r => r.student_id) || []),
+                    record.student_id
+                  ]);
+                  
+                  newCourses[courseIndex] = {
+                    ...newCourses[courseIndex],
+                    attendanceRecords: [
+                      ...(newCourses[courseIndex].attendanceRecords || []),
+                      {
+                        id: record.id,
+                        scanned_at: record.scanned_at,
+                        session_id: record.session_id,
+                        student_id: record.student_id,
+                        students: studentData
+                      }
+                    ],
+                    uniqueStudents: uniqueStudents.size
+                  };
+                }
+              });
+              
+              return newCourses;
+            });
+
+            // Update live activity (limited to 30)
+            setLiveActivity(prev => {
+              const newActivities = batch.map(b => ({
+                id: b.record.id,
+                studentName: b.studentData?.profiles?.full_name || 'Unknown',
+                matricNo: b.studentData?.matric_no || 'N/A',
+                courseCode: b.courseCode,
+                time: new Date().toLocaleTimeString(),
+                timestamp: Date.now()
+              }));
+              
+              return [...newActivities, ...prev].slice(0, 30);
+            });
+
+          } catch (err) {
+            console.error('Error processing real-time update:', err);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      if (channelRef.current) {
+        channelRef.current.unsubscribe();
+      }
+    };
+  }, [courses, activeSessions, addToBatch]);
+
+  const fetchHOCAttendance = useCallback(async () => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       setError('');
 
       console.log('🔍 Fetching HOC attendance for user:', userId);
 
-      // Get student ID
+      // Get student info
       const { data: student, error: studentError } = await supabase
         .from('students')
-        .select('id')
+        .select('id, department, level')
         .eq('user_id', userId)
         .single();
 
-      if (studentError) throw studentError;
+      if (studentError) {
+        console.error('Student error:', studentError);
+        throw studentError;
+      }
 
       console.log('✅ Student found:', student);
 
-      // Get courses where user is HOC
+      // Get HOC courses
       const { data: repCourses, error: repError } = await supabase
         .from('course_representatives')
         .select(`
@@ -195,42 +393,83 @@ export const useHOCAttendance = (userId) => {
             course_code,
             course_title,
             department,
-            semester
+            semester,
+            level
           )
         `)
         .eq('student_id', student.id);
 
-      if (repError) throw repError;
+      if (repError) {
+        console.error('Rep error:', repError);
+        throw repError;
+      }
 
-      const coursesList = repCourses.map(item => item.courses).filter(Boolean);
-      console.log('📚 Courses where user is HOC:', coursesList);
+      console.log('📚 Raw courses:', repCourses);
 
-      if (coursesList.length === 0) {
+      let coursesList = repCourses
+        .map(item => item.courses)
+        .filter(Boolean)
+        .filter(course => course.department === student.department);
+
+      console.log('📚 Filtered courses:', coursesList);
+
+      if (!coursesList.length) {
         setCourses([]);
+        setStats({
+          totalStudents: 0,
+          totalCourses: 0,
+          activeSessions: 0
+        });
+        setLoading(false);
         return;
       }
 
-      // For each course, get attendance stats
+      // Get active sessions
+      const { data: sessionsData, error: sessionsError } = await supabase
+        .from('attendance_sessions')
+        .select('*')
+        .in('course_id', coursesList.map(c => c.id))
+        .eq('is_active', true)
+        .gt('expires_at', new Date().toISOString());
+
+      if (sessionsError) {
+        console.error('Sessions error:', sessionsError);
+      }
+
+      const activeSessionsMap = {};
+      sessionsData?.forEach(session => {
+        activeSessionsMap[session.course_id] = session;
+      });
+      setActiveSessions(activeSessionsMap);
+
+      // Get attendance stats for each course
       const coursesWithStats = await Promise.all(
         coursesList.map(async (course) => {
           console.log(`📊 Processing course: ${course.course_code}`);
-
-          // Get all sessions for this course
+          
+          // Get sessions
           const { data: sessions, error: sessionsError } = await supabase
             .from('attendance_sessions')
             .select('id, created_at, expires_at, is_active')
             .eq('course_id', course.id)
             .order('created_at', { ascending: false });
 
-          if (sessionsError) throw sessionsError;
+          if (sessionsError) {
+            console.error('Sessions error for course:', course.course_code, sessionsError);
+          }
 
-          console.log(`  Found ${sessions?.length || 0} sessions`);
+          // Get total students
+          const { count: totalStudents, error: countError } = await supabase
+            .from('course_enrollments')
+            .select('*', { count: 'exact', head: true })
+            .eq('course_id', course.id);
 
-          const sessionIds = sessions?.map(s => s.id) || [];
+          if (countError) {
+            console.error('Count error for course:', course.course_code, countError);
+          }
 
-          // Get attendance records for these sessions with student details
           let records = [];
-          if (sessionIds.length > 0) {
+          if (sessions && sessions.length > 0) {
             const { data: recordsData, error: recordsError } = await supabase
               .from('attendance_records')
               .select(`
@@ -242,32 +481,32 @@ export const useHOCAttendance = (userId) => {
                   id,
                   matric_no,
                   user_id,
+                  department,
+                  level,
                   profiles (
                     full_name
                   )
                 )
               `)
-              .in('session_id', sessionIds)
-              .order('scanned_at', { ascending: false });
+              .in('session_id', sessions.map(s => s.id))
+              .order('scanned_at', { ascending: false })
+              .limit(1000);
 
-            if (recordsError) throw recordsError;
-            records = recordsData || [];
+            if (recordsError) {
+              console.error('Records error for course:', course.course_code, recordsError);
+            } else {
+              records = recordsData || [];
+            }
           }
 
-          console.log(`  Found ${records.length} attendance records`);
+          // Filter records
+          const validRecords = records.filter(r => 
+            r.students?.department === student.department
+          );
 
-          // Get total enrolled students
-          const { count: totalStudents, error: countError } = await supabase
-            .from('course_enrollments')
-            .select('*', { count: 'exact', head: true })
-            .eq('course_id', course.id);
+          const uniqueStudentIds = new Set(validRecords.map(r => r.student_id));
 
-          if (countError) throw countError;
-
-          // Calculate unique students who have attended
-          const uniqueStudentIds = new Set(records.map(r => r.student_id));
-          
-          // Calculate attendance by session for today
+          // Calculate today's attendance
           const today = new Date();
           today.setHours(0, 0, 0, 0);
           
@@ -276,22 +515,20 @@ export const useHOCAttendance = (userId) => {
           ) || [];
           
           const todaySessionIds = todaySessions.map(s => s.id);
-          
-          const todayAttendance = records.filter(r => 
+          const todayAttendance = validRecords.filter(r => 
             todaySessionIds.includes(r.session_id)
           ).length;
 
-          // Calculate overall attendance percentage
-          const totalPossibleAttendances = (sessions?.length || 0) * (totalStudents || 1);
-          const overallPercentage = totalPossibleAttendances > 0 
-            ? Math.round((records.length / totalPossibleAttendances) * 100) 
+          const totalPossible = (sessions?.length || 0) * (totalStudents || 1);
+          const overallPercentage = totalPossible > 0 
+            ? Math.round((validRecords.length / totalPossible) * 100) 
             : 0;
 
           return {
             ...course,
             totalSessions: sessions?.length || 0,
             totalStudents: totalStudents || 0,
-            attendanceRecords: records,
+            attendanceRecords: validRecords,
             uniqueStudents: uniqueStudentIds.size,
             todayAttendance,
             overallPercentage,
@@ -300,17 +537,41 @@ export const useHOCAttendance = (userId) => {
         })
       );
 
-      console.log('✅ Final courses with stats:', coursesWithStats);
-      setCourses(coursesWithStats);
-    } catch (error) {
-      console.error('❌ Error fetching HOC attendance:', error);
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+      console.log('✅ Courses with stats:', coursesWithStats);
 
-  return { courses, loading, error, refetch: fetchHOCAttendance };
+      if (mountedRef.current) {
+        setCourses(coursesWithStats);
+        setStats({
+          totalStudents: coursesWithStats.reduce((acc, c) => acc + c.uniqueStudents, 0),
+          totalCourses: coursesWithStats.length,
+          activeSessions: Object.keys(activeSessionsMap).length
+        });
+        setLoading(false);
+      }
+
+    } catch (err) {
+      console.error('❌ Error fetching HOC attendance:', err);
+      if (mountedRef.current) {
+        setError(err.message);
+        setLoading(false);
+      }
+    }
+  }, [userId]);
+
+  const refetch = useCallback(() => {
+    fetchAttemptedRef.current = false;
+    fetchHOCAttendance();
+  }, [fetchHOCAttendance]);
+
+  return { 
+    courses, 
+    loading, 
+    error, 
+    activeSessions,
+    liveActivity,
+    stats,
+    refetch 
+  };
 };
 
 export const useCourseAttendance = (courseId) => {
