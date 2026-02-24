@@ -40,6 +40,10 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
   const isMounted = useRef(true);
   const isSubmitting = useRef(false);
   const timeoutRef = useRef(null);
+  
+  // Rate limiting refs - moved inside component
+  const submissionCount = useRef(0);
+  const lastSubmissionTime = useRef(Date.now());
 
   useEffect(() => {
     isMounted.current = true;
@@ -61,7 +65,7 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
       return {
         lat: data.latitude,
         lng: data.longitude,
-        accuracy: 5000, // IP accuracy is low
+        accuracy: 5000,
         city: data.city,
         region: data.region,
         country: data.country_name,
@@ -118,7 +122,6 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
       },
       (err) => {
         console.warn('GPS error:', err);
-        // Try IP fallback
         getIpLocation().then(ipLoc => {
           if (ipLoc) {
             setIpLocation(ipLoc);
@@ -165,12 +168,16 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
       document.getElementById(`code-${index + 1}`)?.focus();
     }
 
-    if (index === 5 && value && newCode.every(d => d) && !isSubmitting.current) {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    if (newCode.every(d => d !== '') && !isSubmitting.current && !loading) {
       timeoutRef.current = setTimeout(() => {
-        if (!isSubmitting.current && isMounted.current) {
+        if (!isSubmitting.current && isMounted.current && newCode.every(d => d !== '')) {
           handleSubmit();
         }
-      }, 300);
+      }, 500);
     }
   };
 
@@ -180,8 +187,46 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
     }
   };
 
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371e3;
+    const φ1 = lat1 * Math.PI/180;
+    const φ2 = lat2 * Math.PI/180;
+    const Δφ = (lat2 - lat1) * Math.PI/180;
+    const Δλ = (lon2 - lon1) * Math.PI/180;
+
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+    return R * c;
+  };
+
   const handleSubmit = async () => {
+    // Prevent multiple submissions
     if (isSubmitting.current || loading) return;
+    
+    // Rate limiting - now inside the function where it belongs
+    const now = Date.now();
+    
+    // Reset counter after 30 seconds of inactivity
+    if (now - lastSubmissionTime.current > 30000) {
+      submissionCount.current = 0;
+    }
+    
+    // Allow up to 10 attempts per minute
+    if (submissionCount.current >= 10) {
+      const waitTime = Math.ceil((60000 - (now - lastSubmissionTime.current)) / 1000);
+      if (waitTime > 0) {
+        setError(`Too many attempts. Please wait ${waitTime} seconds.`);
+        return;
+      } else {
+        submissionCount.current = 0;
+      }
+    }
+
+    submissionCount.current++;
+    lastSubmissionTime.current = now;
     
     if (!location && !locationError) {
       setError('Getting location...');
@@ -208,6 +253,10 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
             course_id,
             expires_at,
             is_active,
+            allowed_location_lat,
+            allowed_location_lng,
+            allowed_radius_meters,
+            strict_location,
             courses (
               course_code,
               course_title,
@@ -225,6 +274,34 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
       }
 
       const session = sessions[0];
+
+      // Geofencing check
+    // In handleSubmit, modify the geofencing check
+if (session.allowed_location_lat && session.allowed_location_lng) {
+  if (!location) {
+    throw new Error('Location required for this session. Please enable GPS.');
+  }
+
+  const distance = calculateDistance(
+    location.lat,
+    location.lng,
+    session.allowed_location_lat,
+    session.allowed_location_lng
+  );
+
+  // Use a dynamic radius based on GPS accuracy
+  const baseRadius = session.allowed_radius_meters || 500;
+  const accuracyBuffer = Math.max(location.accuracy || 0, session.accuracy || 0) * 1.5;
+  const effectiveRadius = baseRadius + accuracyBuffer;
+  
+  if (distance > effectiveRadius) {
+    const distanceInMeters = Math.round(distance);
+    throw new Error(
+      `You are ${distanceInMeters}m away from the allowed location (within ${Math.round(effectiveRadius)}m allowed). ` +
+      `Please ensure you're in the classroom and GPS is accurate.`
+    );
+  }
+}
 
       // Get student
       const { data: student } = await executeWithRetry(() =>
@@ -266,6 +343,9 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
       if (!result.success) {
         throw new Error(result.error);
       }
+
+      // Reset rate limit on success
+      submissionCount.current = 0;
 
       if (isMounted.current) {
         onSuccess(`Attendance marked for ${session.courses?.course_code}`);
@@ -325,7 +405,7 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
           )}
         </div>
 
-        {/* Location Status - Single unified display */}
+        {/* Location Status */}
         <div className={`flex items-center p-3 rounded-lg ${
           location ? 'bg-green-50' : useManualLocation ? 'bg-yellow-50' : locationError ? 'bg-red-50' : 'bg-yellow-50'
         }`}>
@@ -345,7 +425,6 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
                 </span>
                 <p className="text-xs text-green-600">
                   Accuracy: ±{Math.round(location.accuracy)}m
-                  {location.method === 'ip' && ' (IP-based)'}
                 </p>
               </div>
             </>
@@ -407,7 +486,7 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
           </div>
         )}
 
-        {/* Retry Count (for debugging, remove in production) */}
+        {/* Retry Count (for debugging) */}
         {retryCount > 0 && process.env.NODE_ENV === 'development' && (
           <p className="text-xs text-gray-400 text-center">
             Retry attempts: {retryCount}

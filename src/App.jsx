@@ -14,6 +14,7 @@ import { ProtectedRoute } from './components/common/layouts/ProtectedRoute'
 import { LoginPage } from './pages/LoginPage'
 import HocDashboard from './components/lecturer/HocDashboard'
 import { CourseAttendance } from './pages/CourseAttendance'
+import StudentProfile from './pages/StudentProfile'
 
 
 const DashboardRouter = () => {
@@ -71,6 +72,16 @@ function App() {
     <ProtectedRoute allowedRoles={['hoc', 'admin']}>
       <Layout>
         <CourseAttendance />
+      </Layout>
+    </ProtectedRoute>
+  } 
+/>
+<Route 
+  path="/profile" 
+  element={
+    <ProtectedRoute>
+      <Layout>
+        <StudentProfile />
       </Layout>
     </ProtectedRoute>
   } 

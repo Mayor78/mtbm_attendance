@@ -5,7 +5,9 @@ import { Bell, ChevronDown, User, LogOut, Anchor, Menu } from 'lucide-react';
 const Header = ({ schoolName = "FCFMT", username, onSignOut, userData, onMenuClick }) => {
   const navigate = useNavigate();
   const [showUserMenu, setShowUserMenu] = useState(false);
-
+const handleNavigate = ()=>{
+  navigate("/profile")
+}
   return (
     <header className="fixed w-full top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-100">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -54,7 +56,7 @@ const Header = ({ schoolName = "FCFMT", username, onSignOut, userData, onMenuCli
   ? userData.full_name.substring(0, 15) + "..." 
   : userData?.full_name || "Guest"}</p>
                   </div>
-                  <button className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-xl transition-colors">
+                  <button className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-xl transition-colors" onClick={handleNavigate}>
                     <User size={16} /> Profile
                   </button>
                   <div className="h-px bg-slate-100 my-1 mx-2" />

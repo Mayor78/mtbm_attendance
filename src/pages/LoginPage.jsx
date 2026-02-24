@@ -1,8 +1,38 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { LogIn, Mail, Lock, ShieldCheck, UserPlus, User, Hash, AlertCircle, GraduationCap, Crown, Loader } from 'lucide-react'
+
+// Device ID utility
+const generateDeviceId = () => {
+  const userAgent = navigator.userAgent;
+  const screenRes = `${window.screen.width}x${window.screen.height}`;
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const language = navigator.language;
+  const platform = navigator.platform;
+  
+  const fingerprint = `${userAgent}|${screenRes}|${timezone}|${language}|${platform}`;
+  
+  let hash = 0;
+  for (let i = 0; i < fingerprint.length; i++) {
+    hash = ((hash << 5) - hash) + fingerprint.charCodeAt(i);
+    hash = hash & hash;
+  }
+  
+  return Math.abs(hash).toString(36) + Date.now().toString(36);
+};
+
+const getOrCreateDeviceId = () => {
+  let deviceId = localStorage.getItem('device_id');
+  
+  if (!deviceId) {
+    deviceId = generateDeviceId();
+    localStorage.setItem('device_id', deviceId);
+  }
+  
+  return deviceId;
+};
 
 export const LoginPage = () => {
   const [isLogin, setIsLogin] = useState(true)
@@ -15,11 +45,10 @@ export const LoginPage = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [retryCount, setRetryCount] = useState(0)
   const { signIn } = useAuth()
   const navigate = useNavigate()
 
- const departments = [
+  const departments = [
     'Maritime Transport & Business Management (MTBM)',
     'Nautical Science',
     'Marine Engineering',
@@ -31,39 +60,84 @@ export const LoginPage = () => {
 
   const levels = ['100', '200', '300', '400', '500']
 
-  // Debounced login handler with retry logic
+  // Check device access on component mount
+  useEffect(() => {
+    const checkDeviceAccess = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      
+      if (user) {
+        const deviceId = getOrCreateDeviceId()
+        
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('last_device_id, device_history')
+          .eq('id', user.id)
+          .single()
+        
+        if (profile && profile.last_device_id && profile.last_device_id !== deviceId) {
+          // Device mismatch - force logout
+          await supabase.auth.signOut()
+          setError('This device is linked to another account. Please use your own device.')
+        }
+      }
+    }
+    
+    checkDeviceAccess()
+  }, [])
+
   const handleLogin = async (e) => {
     e.preventDefault()
     setLoading(true)
     setError('')
     setSuccess('')
-    setRetryCount(0)
-
-    const attemptLogin = async (retryAttempt = 0) => {
-      try {
-        const { error } = await supabase.auth.signInWithPassword({ 
-          email: email.trim().toLowerCase(), 
-          password 
-        })
-
-        if (error) throw error
-        navigate('/dashboard')
-        
-      } catch (err) {
-        if (err.message?.includes('rate limit') && retryAttempt < 3) {
-          // Exponential backoff for rate limiting
-          const delay = Math.pow(2, retryAttempt) * 1000
-          setTimeout(() => attemptLogin(retryAttempt + 1), delay)
-          setError(`Rate limited. Retrying in ${delay/1000}s...`)
-        } else {
-          throw err
-        }
-      }
-    }
 
     try {
-      await attemptLogin()
+      const deviceId = getOrCreateDeviceId();
+      
+      // Attempt login
+      const { data, error } = await supabase.auth.signInWithPassword({ 
+        email: email.trim().toLowerCase(), 
+        password 
+      })
+
+      if (error) throw error
+
+      // Get profile
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single()
+
+      if (profileError) throw profileError
+
+      // Check if device is already used by another user
+      if (profile.last_device_id && profile.last_device_id !== deviceId) {
+        await supabase.auth.signOut()
+        throw new Error('This device is linked to another account. Please use your own device.')
+      }
+
+      // Update device info with last_login
+      const deviceHistory = profile.device_history || []
+      if (!deviceHistory.includes(deviceId)) {
+        deviceHistory.push(deviceId)
+      }
+
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({
+          last_device_id: deviceId,
+          device_history: deviceHistory,
+          last_login: new Date().toISOString()
+        })
+        .eq('id', data.user.id)
+
+      if (updateError) console.error('Failed to update device info:', updateError)
+
+      navigate('/dashboard')
+      
     } catch (err) {
+      console.error('Login error:', err)
       setError(getUserFriendlyError(err))
     } finally {
       setLoading(false)
@@ -77,31 +151,49 @@ export const LoginPage = () => {
     setSuccess('')
 
     // Validate inputs
-    if (!validateInputs()) return
+    if (!validateInputs()) {
+      setLoading(false)
+      return
+    }
 
     try {
-      // Use a transaction-like approach with retries
-      const result = await executeWithRetry(async () => {
-        // 1. Quick check if email exists (cached check)
-        const { data: existingUser } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('email', email.trim().toLowerCase())
-          .maybeSingle()
+      const deviceId = getOrCreateDeviceId();
 
-        if (existingUser) {
-          throw new Error('Email already registered')
+      const result = await executeWithRetry(async () => {
+        // 1. Check if email exists
+        try {
+          const { data: existingProfile } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('email', email.trim().toLowerCase())
+            .maybeSingle()
+
+          if (existingProfile) {
+            throw new Error('Email already registered')
+          }
+        } catch (checkErr) {
+          if (checkErr.message === 'Email already registered') {
+            throw checkErr
+          }
+          console.warn('Email check warning:', checkErr)
         }
 
-        // 2. Quick check if matric exists
-        const { data: existingMatric } = await supabase
-          .from('students')
-          .select('matric_no')
-          .eq('matric_no', matricNo.toUpperCase())
-          .maybeSingle()
+        // 2. Check if matric exists
+        try {
+          const { data: existingMatric } = await supabase
+            .from('students')
+            .select('matric_no')
+            .eq('matric_no', matricNo.toUpperCase())
+            .maybeSingle()
 
-        if (existingMatric) {
-          throw new Error('Matric number already exists')
+          if (existingMatric) {
+            throw new Error('Matric number already exists')
+          }
+        } catch (checkErr) {
+          if (checkErr.message === 'Matric number already exists') {
+            throw checkErr
+          }
+          console.warn('Matric check warning:', checkErr)
         }
 
         // 3. Create auth user
@@ -116,30 +208,94 @@ export const LoginPage = () => {
           }
         })
 
-        if (authError) throw authError
+        if (authError) {
+          if (authError.message.includes('User already registered')) {
+            throw new Error('Email already registered')
+          }
+          throw authError
+        }
+        
         if (!authData.user) throw new Error('Failed to create account')
 
-        // 4. Create student record (with retry for race conditions)
-        const { error: studentError } = await supabase
-          .from('students')
-          .insert({
-            user_id: authData.user.id,
-            matric_no: matricNo.toUpperCase(),
-            department,
-            level,
-            email: email.trim().toLowerCase(),
-            full_name: fullName.trim()
-          })
+        // 4. Check if profile already exists (in case of race condition)
+        const { data: existingProfile } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('id', authData.user.id)
+          .maybeSingle()
 
-        if (studentError) {
-          // If student insert fails, attempt to clean up auth user
-          await supabase.auth.admin.deleteUser(authData.user.id)
-            .catch(console.error)
-          throw studentError
+        if (!existingProfile) {
+          // Insert profile with all columns
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .insert({
+              id: authData.user.id,
+              email: email.trim().toLowerCase(),
+              full_name: fullName.trim(),
+              role: 'student',
+              created_at: new Date().toISOString(),
+              last_device_id: deviceId,
+              device_history: [deviceId],
+              last_login: new Date().toISOString()
+            })
+
+          if (profileError) {
+            // If it's a duplicate key error, profile was created by a trigger
+            if (profileError.code === '23505') {
+              console.log('Profile already exists - likely created by trigger')
+            } else {
+              console.error('Profile insert failed:', profileError)
+              throw new Error(`Failed to create profile. Please try again.`)
+            }
+          }
+        } else {
+          // Profile exists, update it with device info
+          const deviceHistory = existingProfile.device_history || []
+          if (!deviceHistory.includes(deviceId)) {
+            deviceHistory.push(deviceId)
+          }
+
+          await supabase
+            .from('profiles')
+            .update({
+              last_device_id: deviceId,
+              device_history: deviceHistory,
+              last_login: new Date().toISOString()
+            })
+            .eq('id', authData.user.id)
+        }
+
+        // 5. Check if student record already exists
+        const { data: existingStudent } = await supabase
+          .from('students')
+          .select('id')
+          .eq('user_id', authData.user.id)
+          .maybeSingle()
+
+        if (!existingStudent) {
+          // Insert student record
+          const { error: studentError } = await supabase
+            .from('students')
+            .insert({
+              user_id: authData.user.id,
+              matric_no: matricNo.toUpperCase(),
+              department,
+              level,
+              email: email.trim().toLowerCase(),
+              full_name: fullName.trim(),
+              created_at: new Date().toISOString()
+            })
+
+          if (studentError) {
+            if (studentError.code === '23505') {
+              throw new Error('Matric number already exists')
+            }
+            throw new Error(`Failed to create student record. Please try again.`)
+          }
         }
 
         return authData
-      }, 3) // Max 3 retries
+      }, 3)
 
       setSuccess('Account created successfully! You can now login.')
       setIsLogin(true)
@@ -153,7 +309,6 @@ export const LoginPage = () => {
     }
   }
 
-  // Helper function for retry logic with exponential backoff
   const executeWithRetry = async (fn, maxRetries = 3) => {
     let lastError
     
@@ -163,13 +318,11 @@ export const LoginPage = () => {
       } catch (err) {
         lastError = err
         
-        // Don't retry certain errors
         if (err.message?.includes('already exists') || 
             err.message?.includes('invalid')) {
           throw err
         }
 
-        // Exponential backoff
         if (i < maxRetries - 1) {
           const delay = Math.pow(2, i) * 1000 + Math.random() * 1000
           await new Promise(resolve => setTimeout(resolve, delay))
@@ -180,48 +333,40 @@ export const LoginPage = () => {
     throw lastError
   }
 
-  // Input validation
   const validateInputs = () => {
     if (!fullName.trim()) {
       setError('Full name is required')
-      setLoading(false)
       return false
     }
 
     if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
       setError('Please enter a valid email address')
-      setLoading(false)
       return false
     }
 
-    if (!matricNo.match(/^[A-Z0-9]{7,15}$/i)) {
-      setError('Please enter a valid matric number (7-15 alphanumeric characters)')
-      setLoading(false)
-      return false
-    }
+   if (!matricNo || matricNo.trim().length < 5 || matricNo.trim().length > 20) {
+  setError('Please enter a valid matric number (5-20 characters)')
+  return false
+}
 
     if (!department) {
       setError('Department is required')
-      setLoading(false)
       return false
     }
 
     if (!level) {
       setError('Level is required')
-      setLoading(false)
       return false
     }
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters')
-      setLoading(false)
       return false
     }
 
     return true
   }
 
-  // User-friendly error messages
   const getUserFriendlyError = (error) => {
     const message = error.message?.toLowerCase() || ''
     
@@ -239,6 +384,9 @@ export const LoginPage = () => {
     }
     if (message.includes('network') || message.includes('fetch')) {
       return 'Network error. Please check your connection.'
+    }
+    if (message.includes('linked to another account')) {
+      return 'This device is linked to another account. Please use your own device.'
     }
     
     return error.message || 'An error occurred. Please try again.'

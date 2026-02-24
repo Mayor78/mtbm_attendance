@@ -2,29 +2,28 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { supabase } from '../../lib/supabase'
-import { useHOCAttendance, useCourseAttendance } from '../../hooks/useAttendance'
+import { useHOCAttendance } from '../../hooks/useAttendance'
 import { 
   QrCode, Copy, Check, Clock, Eye, X, Calendar, Users, 
   Download, RefreshCw, Plus, Edit, Trash2, BookOpen, 
-  GraduationCap, Hash, BookMarked, ChevronRight, AlertCircle,
-  ChevronLeft, LayoutDashboard, Search,
-  Activity
+  GraduationCap, BookMarked, ChevronRight, AlertCircle,
+  ChevronLeft, Activity
 } from 'lucide-react'
 import { QRCodeCanvas } from 'qrcode.react'
 import AttendanceSkeleton from '../common/AttendanceSkeleton'
+import ManualAttendanceModal from '../hoc/ManualAttendanceModal'
+import ManualAttendanceButton from '../hoc/ManualAttendanceButton'
+
 
 export const HocDashboard = () => {
   const { user, profile } = useAuth()
-  const {  courses, 
-    loading, 
-    error: hookError, 
+  const { courses, loading, error: hookError, liveActivity, refetch } = useHOCAttendance(user?.id)
   
-    liveActivity,
-    refetch  } = useHOCAttendance(user?.id)
-  const [studentLevel, setStudentLevel] = useState('');
+  // Modal States
   const [showSessionModal, setShowSessionModal] = useState(false)
   const [showQRModal, setShowQRModal] = useState(false)
   const [showCourseModal, setShowCourseModal] = useState(false)
+  const [showManualModal, setShowManualModal] = useState(false)
   const [editingCourse, setEditingCourse] = useState(null)
   const [selectedCourse, setSelectedCourse] = useState('')
   const [newSession, setNewSession] = useState(null)
@@ -33,6 +32,9 @@ export const HocDashboard = () => {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [showLiveFeed, setShowLiveFeed] = useState(true)
+  const [studentLevel, setStudentLevel] = useState('')
+  const [isCreatingSession, setIsCreatingSession] = useState(false)
+  
   
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1)
@@ -45,7 +47,7 @@ export const HocDashboard = () => {
     semester: ''
   })
 
-  // --- LOGIC PRESERVATION (UNCHANGED) ---
+  // Department and Course Options
   const departments = [
     'Maritime Transport & Business Management (MTBM)',
     'Nautical Science',
@@ -95,26 +97,25 @@ export const HocDashboard = () => {
     }
   }
 
-  // Add this state
-
-
-// Fetch student level when modal opens
-useEffect(() => {
-  if (showCourseModal && !editingCourse) {
-    const fetchStudentLevel = async () => {
-      const { data } = await supabase
-        .from('students')
-        .select('level')
-        .eq('user_id', user.id)
-        .single();
-      if (data) setStudentLevel(data.level);
-    };
-    fetchStudentLevel();
-  }
-}, [showCourseModal, editingCourse, user.id]);
   const handleTitleChange = (e) => setCourseForm({ ...courseForm, course_title: e.target.value })
 
-  React.useEffect(() => {
+  // Fetch student level when modal opens
+  useEffect(() => {
+    if (showCourseModal && !editingCourse) {
+      const fetchStudentLevel = async () => {
+        const { data } = await supabase
+          .from('students')
+          .select('level')
+          .eq('user_id', user.id)
+          .single();
+        if (data) setStudentLevel(data.level);
+      };
+      fetchStudentLevel();
+    }
+  }, [showCourseModal, editingCourse, user.id]);
+
+  // Check active sessions
+  useEffect(() => {
     if (courses.length > 0) checkActiveSessions()
   }, [courses])
 
@@ -134,87 +135,81 @@ useEffect(() => {
   }
 
   const handleCourseSubmit = async (e) => {
-  e.preventDefault()
-  setError(''); 
-  setSuccess('')
-  
-  try {
-    // Get HOC's level from students table
-    const { data: student, error: studentError } = await supabase
-      .from('students')
-      .select('level')
-      .eq('user_id', user.id)
-      .single();
-
-    if (studentError) throw new Error('Could not fetch your level information');
-
-    if (editingCourse) {
-      // When editing, we should preserve the original level or allow change? 
-      // For now, we'll keep the existing level
-      const { error } = await supabase
-        .from('courses')
-        .update({
-          course_code: courseForm.course_code,
-          course_title: courseForm.course_title,
-          department: courseForm.department,
-          semester: courseForm.semester
-          // level is not updated - preserve original
-        })
-        .eq('id', editingCourse.id)
-      
-      if (error) throw error
-      setSuccess('Course updated successfully!')
-    } else {
-      // Create new course with HOC's level auto-populated
-      const { data, error } = await supabase
-        .from('courses')
-        .insert({
-          course_code: courseForm.course_code,
-          course_title: courseForm.course_title,
-          department: courseForm.department,
-          semester: courseForm.semester,
-          level: student.level // Auto-populate from HOC's level
-        })
-        .select()
-        .single()
-      
-      if (error) throw error
-      
-      // Get student ID for course representative
-      const { data: studentData, error: studentIdError } = await supabase
+    e.preventDefault()
+    setError(''); 
+    setSuccess('')
+    
+    try {
+      const { data: student, error: studentError } = await supabase
         .from('students')
-        .select('id')
+        .select('level')
         .eq('user_id', user.id)
-        .single()
-      
-      if (studentIdError) throw studentIdError
-      
-      if (studentData) {
-        const { error: repError } = await supabase
-          .from('course_representatives')
-          .insert({ 
-            student_id: studentData.id, 
-            course_id: data.id 
+        .single();
+
+      if (studentError) throw new Error('Could not fetch your level information');
+
+      if (editingCourse) {
+        const { error } = await supabase
+          .from('courses')
+          .update({
+            course_code: courseForm.course_code,
+            course_title: courseForm.course_title,
+            department: courseForm.department,
+            semester: courseForm.semester
           })
+          .eq('id', editingCourse.id)
         
-        if (repError) {
-          console.error('Rep insert error:', repError)
-          setSuccess('Course created! But you may need to manually assign yourself as HOC.')
-        } else {
-          setSuccess('Course created successfully!')
+        if (error) throw error
+        setSuccess('Course updated successfully!')
+      } else {
+        const { data, error } = await supabase
+          .from('courses')
+          .insert({
+            course_code: courseForm.course_code,
+            course_title: courseForm.course_title,
+            department: courseForm.department,
+            semester: courseForm.semester,
+            level: student.level
+          })
+          .select()
+          .single()
+        
+        if (error) throw error
+        
+        const { data: studentData, error: studentIdError } = await supabase
+          .from('students')
+          .select('id')
+          .eq('user_id', user.id)
+          .single()
+        
+        if (studentIdError) throw studentIdError
+        
+        if (studentData) {
+          const { error: repError } = await supabase
+            .from('course_representatives')
+            .insert({ 
+              student_id: studentData.id, 
+              course_id: data.id 
+            })
+          
+          if (repError) {
+            console.error('Rep insert error:', repError)
+            setSuccess('Course created! But you may need to manually assign yourself as HOC.')
+          } else {
+            setSuccess('Course created successfully!')
+          }
         }
       }
+      
+      setCourseForm({ course_code: '', course_title: '', department: '', semester: '' })
+      setEditingCourse(null); 
+      setShowCourseModal(false); 
+      refetch()
+      
+    } catch (error) { 
+      setError(error.message) 
     }
-    
-    setCourseForm({ course_code: '', course_title: '', department: '', semester: '' })
-    setEditingCourse(null); 
-    setShowCourseModal(false); 
-    refetch()
-    
-  } catch (error) { 
-    setError(error.message) 
   }
-}
 
   const deleteCourse = async (id) => {
     if (!confirm('Are you sure?')) return
@@ -224,27 +219,34 @@ useEffect(() => {
     } catch (e) { setError('Delete failed') }
   }
 
- const startSession = async () => {
+
+
+const startSession = async () => {
   if (!selectedCourse) return
   
   try {
     setError('')
+    setIsCreatingSession(true) // Use this instead of setLoading
+
+    // Get HOC's current location for geofencing
+    const hocLocation = await getCurrentLocation();
     
-    // Get HOC's department and level
+    if (!hocLocation) {
+      throw new Error('Cannot create session without location. Please enable GPS to set the attendance boundary.');
+    }
+
     const { data: student } = await supabase
       .from('students')
       .select('department, level')
       .eq('user_id', user.id)
       .single();
 
-    // Get course details to verify
     const { data: course } = await supabase
       .from('courses')
       .select('department, level')
       .eq('id', selectedCourse)
       .single();
 
-    // Verify HOC can create session for this course
     if (course.department !== student.department) {
       throw new Error(`You can only create sessions for ${student.department} department courses.`);
     }
@@ -266,7 +268,12 @@ useEffect(() => {
         start_time: new Date().toISOString(),
         expires_at: expires_at,
         is_active: true,
-        numeric_code: numeric_code
+        numeric_code: numeric_code,
+        // Geofencing data
+        allowed_location_lat: hocLocation.lat,
+        allowed_location_lng: hocLocation.lng,
+        allowed_radius_meters: 500, // 500 meter radius - adjust as needed
+        strict_location: true // This enforces location check
       })
       .select()
       .single()
@@ -275,10 +282,15 @@ useEffect(() => {
 
     if (data) {
       const course = courses.find(c => c.id === selectedCourse)
+      
+      // Show success with location info
+      setSuccess(`Session started at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
+      
       setNewSession({ 
         ...data, 
         course_code: course?.course_code, 
-        course_title: course?.course_title 
+        course_title: course?.course_title,
+        location: hocLocation
       })
       
       setActiveSessions(prev => ({
@@ -293,9 +305,197 @@ useEffect(() => {
   } catch (error) { 
     console.error('Start session error:', error)
     setError(error.message || 'Failed to start session.') 
+  } finally {
+    setIsCreatingSession(false) // Use this instead of setLoading(false)
   }
 }
 
+// Helper function to get current location with high accuracy
+const getCurrentLocation = () => {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      // No GPS at all - warn user but still try IP
+      console.warn('No GPS available, using IP location (may be inaccurate)');
+      getIpLocation().then(ipLoc => {
+        resolve({
+          ...ipLoc,
+          warning: 'Using IP location - accuracy may be low'
+        });
+      }).catch(reject);
+      return;
+    }
+
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    };
+
+    const readings = [];
+    let attempts = 0;
+    const maxAttempts = 3;
+    let bestGpsLocation = null;
+    
+    const tryGetPosition = () => {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const location = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            source: 'gps',
+            timestamp: new Date().toISOString()
+          };
+
+          readings.push(location);
+          attempts++;
+
+          // Track the best GPS reading (lowest accuracy = best)
+          if (!bestGpsLocation || location.accuracy < bestGpsLocation.accuracy) {
+            bestGpsLocation = location;
+          }
+
+          // If accuracy is good (<50m), resolve immediately with GPS
+          if (location.accuracy < 50) {
+            console.log(`✅ Good GPS accuracy: ${location.accuracy}m`);
+            
+            // Get address in background (don't await)
+            getAddressForLocation(location).then(addr => {
+              location.address = addr;
+            }).catch(() => {});
+
+            resolve(location);
+            return;
+          }
+
+          // If we have enough readings, use the best one
+          if (attempts >= maxAttempts) {
+            if (bestGpsLocation) {
+              console.log(`📊 Using best GPS reading: ${bestGpsLocation.accuracy}m`);
+              
+              // Get address for best location
+              try {
+                const address = await getAddressForLocation(bestGpsLocation);
+                bestGpsLocation.address = address;
+              } catch (e) {
+                // Ignore address errors
+              }
+              
+              // Add warning if accuracy is poor
+              if (bestGpsLocation.accuracy > 100) {
+                bestGpsLocation.warning = 'GPS accuracy is low. Please ensure you have a clear view of the sky.';
+              }
+              
+              resolve(bestGpsLocation);
+            } else {
+              // No GPS readings, try IP as absolute last resort
+              console.warn('⚠️ No valid GPS readings, using IP fallback');
+              const ipLoc = await getIpLocation();
+              resolve({
+                ...ipLoc,
+                warning: 'Using IP location - this may be inaccurate. Please enable GPS for better accuracy.'
+              });
+            }
+            return;
+          }
+
+          // Try again after a short delay
+          setTimeout(tryGetPosition, 1000);
+        },
+        (err) => {
+          console.warn('GPS attempt failed:', err);
+          attempts++;
+          
+          if (attempts < maxAttempts) {
+            // Try again
+            setTimeout(tryGetPosition, 1000);
+          } else {
+            // All GPS attempts failed, use IP as last resort
+            console.warn('⚠️ All GPS attempts failed, using IP fallback');
+            getIpLocation().then(ipLoc => {
+              resolve({
+                ...ipLoc,
+                warning: 'GPS unavailable - using IP location (may be inaccurate)'
+              });
+            }).catch(reject);
+          }
+        },
+        options
+      );
+    };
+
+    // Start the first attempt
+    tryGetPosition();
+  });
+};
+
+// Helper to get address (separate function so it doesn't block)
+const getAddressForLocation = async (location) => {
+  try {
+    const response = await fetch(
+      `https://tywhkdmlhjiluslmxdjt.supabase.co/functions/v1/geocode?lat=${location.lat}&lng=${location.lng}`
+    );
+    if (response.ok) {
+      const data = await response.json();
+      return data.address || `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`;
+    }
+  } catch (err) {
+    console.warn('Geocoding failed:', err);
+  }
+  return `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`;
+};
+
+// Get IP-based location as absolute last resort
+// Get IP-based location as absolute last resort
+const getIpLocation = async () => {
+  try {
+    const response = await fetch('https://ipapi.co/json/');
+    const data = await response.json();
+    
+    if (!data.latitude || !data.longitude) {
+      throw new Error('Invalid IP location data');
+    }
+
+    const location = {
+      lat: data.latitude,
+      lng: data.longitude,
+      accuracy: 5000, // IP accuracy is very low (5km)
+      city: data.city,
+      region: data.region,
+      country: data.country_name,
+      method: 'ip',
+      source: 'ip',
+      timestamp: new Date().toISOString()
+    };
+
+    // Try to get address
+    try {
+      const address = await getAddressForLocation(location);
+      location.address = address;
+    } catch (e) {
+      // Ignore address errors for IP
+    }
+    
+    return location;
+  } catch (error) {
+    console.error('IP location error:', error);
+    throw new Error('Could not get location from IP');
+  }
+};
+
+
+
+// Optional: Location accuracy warning component
+const LocationAccuracyWarning = ({ accuracy }) => {
+  if (accuracy > 50) {
+    return (
+      <p className="text-xs text-yellow-600 mt-1">
+        ⚠️ Low accuracy (±{Math.round(accuracy)}m). Students must be within 200m.
+      </p>
+    );
+  }
+  return null;
+};
   const endSession = async (id) => {
     await supabase.from('attendance_sessions').update({ is_active: false }).eq('id', id)
     checkActiveSessions(); refetch()
@@ -320,7 +520,7 @@ useEffect(() => {
     setEditingCourse(course); setCourseForm(course); setShowCourseModal(true)
   }
 
-  // --- UI CALCULATION ---
+  // Pagination
   const paginatedCourses = useMemo(() => {
     const startIndex = (currentPage - 1) * coursesPerPage
     return courses.slice(startIndex, startIndex + coursesPerPage)
@@ -329,10 +529,11 @@ useEffect(() => {
   const totalPages = Math.ceil(courses.length / coursesPerPage)
 
   if (loading) return <AttendanceSkeleton/>
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-24 text-slate-900 space-y-8">
       
-      {/* --- REFINED HEADER --- */}
+      {/* Header */}
       <header className="relative overflow-hidden bg-white border border-slate-200 p-6 rounded-[2rem] shadow-sm">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-1">
@@ -346,6 +547,7 @@ useEffect(() => {
           </div>
           
           <div className="flex flex-wrap gap-3">
+            <ManualAttendanceButton onClick={() => setShowManualModal(true)} />
             <button
               onClick={() => { setEditingCourse(null); setCourseForm({ course_code: '', course_title: '', department: '', semester: '' }); setShowCourseModal(true); }}
               className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 px-5 py-3 rounded-2xl text-sm font-bold text-slate-700 hover:bg-slate-100 transition-all"
@@ -360,7 +562,6 @@ useEffect(() => {
             </button>
           </div>
         </div>
-        {/* Background Decorative Element */}
         <div className="absolute -right-10 -top-10 w-40 h-40 bg-indigo-50 rounded-full blur-3xl opacity-50"></div>
       </header>
 
@@ -381,242 +582,146 @@ useEffect(() => {
         </div>
       )}
 
-      {/* --- LIVE SESSIONS (MOBILE OPTIMIZED) --- */}
-     {/* --- LIVE SESSIONS WITH COUNT ANIMATION --- */}
-{Object.keys(activeSessions).length > 0 && (
-  <section className="space-y-4">
-    <div className="flex items-center gap-2 px-2">
-      <div className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></div>
-      <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Live Broadcasts</h2>
-    </div>
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {Object.entries(activeSessions).map(([courseId, session]) => {
-        const course = courses.find(c => c.id === courseId)
-        const count = course?.attendanceRecords?.filter(r => r.session_id === session.id).length || 0
-        
-        return (
-          <div 
-            key={session.id} 
-            className="bg-indigo-600 rounded-3xl p-5 text-white shadow-xl shadow-indigo-200 overflow-hidden relative group hover:shadow-2xl transition-all duration-300"
-          >
-            {/* Animated background pulse */}
-            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-purple-600 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-            
-            <div className="relative z-10 space-y-4">
-              <div className="flex justify-between items-start">
-                <div className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase backdrop-blur-sm">
-                  🟢 Live
-                </div>
-                <button 
-                  onClick={() => endSession(session.id)} 
-                  className="text-xs bg-rose-500 hover:bg-rose-600 px-4 py-1.5 rounded-xl font-bold transition-all duration-300 hover:scale-105 active:scale-95 shadow-lg"
-                >
-                  End Session
-                </button>
-              </div>
-              
-              <div>
-                <h3 className="text-lg font-black leading-tight line-clamp-1">{course?.course_code}</h3>
-                <p className="text-indigo-100 text-xs font-medium line-clamp-1">{course?.course_title}</p>
-                <p className="text-indigo-200 text-[10px] mt-1 font-mono">
-                  Started {new Date(session.start_time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                </p>
-              </div>
-              
-              <div className="flex items-end justify-between border-t border-white/10 pt-4">
-                <div className="flex items-baseline gap-2">
-                  {/* Animated Counter */}
-                  <div className="relative">
-                    <span 
-                      key={count} 
-                      className="text-4xl font-black tabular-nums inline-block animate-number-pop"
-                    >
-                      {count}
-                    </span>
-                    <span className="absolute -top-1 -right-2 text-[10px] bg-white/20 px-1 rounded-full">
-                      {count === 1 ? 'student' : 'students'}
-                    </span>
-                  </div>
-                  <span className="text-indigo-200 text-xs font-bold uppercase tracking-tighter ml-2">
-                    Checked-in
-                  </span>
-                </div>
-                
-                {/* Live Activity Indicator */}
-                {liveActivity.filter(a => a.courseCode === course?.course_code).length > 0 && (
-                  <div className="flex items-center gap-1 animate-slide-in-right">
-                    <div className="flex -space-x-2">
-                      {liveActivity
-                        .filter(a => a.courseCode === course?.course_code)
-                        .slice(0, 3)
-                        .map((activity, i) => (
-                          <div 
-                            key={i} 
-                            className="w-6 h-6 rounded-full bg-white/20 border-2 border-white flex items-center justify-center text-[8px] font-bold animate-fade-in"
-                            style={{ animationDelay: `${i * 100}ms` }}
-                          >
-                            {activity.studentName.charAt(0)}
-                          </div>
-                        ))}
-                    </div>
-                    <span className="text-[10px] text-white/80 animate-pulse">
-                      +{liveActivity.filter(a => a.courseCode === course?.course_code).length}
-                    </span>
-                  </div>
-                )}
-                
-                <button 
-                  onClick={() => { 
-                    setNewSession({...session, course_code: course?.course_code, course_title: course?.course_title}); 
-                    setShowQRModal(true); 
-                  }}
-                  className="p-3 bg-white text-indigo-600 rounded-2xl hover:scale-110 transition-transform duration-300 shadow-lg hover:rotate-3 active:scale-95"
-                >
-                  <QrCode size={20} />
-                </button>
-              </div>
-            </div>
-            
-            {/* Decorative QR Background */}
-            <QrCode className="absolute -right-4 -bottom-4 text-white/5 rotate-12 transition-all duration-500 group-hover:scale-125 group-hover:rotate-6" size={160} />
-            
-            {/* Scanning Line Animation */}
-            <div className="absolute inset-x-0 h-0.5 bg-white/30 animate-scan-line"></div>
+      {/* Live Sessions */}
+      {Object.keys(activeSessions).length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-2">
+            <div className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></div>
+            <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Live Broadcasts</h2>
           </div>
-        )
-      })}
-    </div>
-  </section>
-)}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Object.entries(activeSessions).map(([courseId, session]) => {
+              const course = courses.find(c => c.id === courseId)
+              const count = course?.attendanceRecords?.filter(r => r.session_id === session.id).length || 0
+              
+              return (
+                <div 
+                  key={session.id} 
+                  className="bg-indigo-600 rounded-3xl p-5 text-white shadow-xl shadow-indigo-200 overflow-hidden relative group hover:shadow-2xl transition-all duration-300"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-purple-600 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                  
+                  <div className="relative z-10 space-y-4">
+                    <div className="flex justify-between items-start">
+                      <div className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase backdrop-blur-sm">
+                        🟢 Live
+                      </div>
+                      <button 
+                        onClick={() => endSession(session.id)} 
+                        className="text-xs bg-rose-500 hover:bg-rose-600 px-4 py-1.5 rounded-xl font-bold transition-all duration-300 hover:scale-105 active:scale-95 shadow-lg"
+                      >
+                        End Session
+                      </button>
+                    </div>
+                    
+                    <div>
+                      <h3 className="text-lg font-black leading-tight line-clamp-1">{course?.course_code}</h3>
+                      <p className="text-indigo-100 text-xs font-medium line-clamp-1">{course?.course_title}</p>
+                      <p className="text-indigo-200 text-[10px] mt-1 font-mono">
+                        Started {new Date(session.start_time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                      </p>
+                    </div>
+                    
+                    <div className="flex items-end justify-between border-t border-white/10 pt-4">
+                      <div className="flex items-baseline gap-2">
+                        <div className="relative">
+                          <span 
+                            key={count} 
+                            className="text-4xl font-black tabular-nums inline-block animate-number-pop"
+                          >
+                            {count}
+                          </span>
+                          <span className="absolute -top-1 -right-2 text-[10px] bg-white/20 px-1 rounded-full">
+                            {count === 1 ? 'student' : 'students'}
+                          </span>
+                        </div>
+                        <span className="text-indigo-200 text-xs font-bold uppercase tracking-tighter ml-2">
+                          Checked-in
+                        </span>
+                      </div>
+                      
+                      {liveActivity.filter(a => a.courseCode === course?.course_code).length > 0 && (
+                        <div className="flex items-center gap-1 animate-slide-in-right">
+                          <div className="flex -space-x-2">
+                            {liveActivity
+                              .filter(a => a.courseCode === course?.course_code)
+                              .slice(0, 3)
+                              .map((activity, i) => (
+                                <div 
+                                  key={i} 
+                                  className="w-6 h-6 rounded-full bg-white/20 border-2 border-white flex items-center justify-center text-[8px] font-bold animate-fade-in"
+                                  style={{ animationDelay: `${i * 100}ms` }}
+                                >
+                                  {activity.studentName.charAt(0)}
+                                </div>
+                              ))}
+                          </div>
+                          <span className="text-[10px] text-white/80 animate-pulse">
+                            +{liveActivity.filter(a => a.courseCode === course?.course_code).length}
+                          </span>
+                        </div>
+                      )}
+                      
+                      <button 
+                        onClick={() => { 
+                          setNewSession({...session, course_code: course?.course_code, course_title: course?.course_title}); 
+                          setShowQRModal(true); 
+                        }}
+                        className="p-3 bg-white text-indigo-600 rounded-2xl hover:scale-110 transition-transform duration-300 shadow-lg hover:rotate-3 active:scale-95"
+                      >
+                        <QrCode size={20} />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <QrCode className="absolute -right-4 -bottom-4 text-white/5 rotate-12 transition-all duration-500 group-hover:scale-125 group-hover:rotate-6" size={160} />
+                  <div className="absolute inset-x-0 h-0.5 bg-white/30 animate-scan-line"></div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
 
-{/* Live Activity Feed */}
-{showLiveFeed && liveActivity.length > 0 && (
-  <div className="fixed bottom-6 right-6 w-80 bg-white rounded-2xl shadow-2xl border border-indigo-100 overflow-hidden z-50 animate-slide-in-right">
-    <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-3 text-white flex justify-between items-center">
-      <div className="flex items-center gap-2">
-        <Activity size={16} className="animate-pulse" />
-        <span className="font-bold text-sm">Live Activity</span>
-      </div>
-      <button 
-        onClick={() => setShowLiveFeed(false)}
-        className="hover:bg-white/20 p-1 rounded-lg transition-colors"
-      >
-        <X size={16} />
-      </button>
-    </div>
-    <div className="max-h-80 overflow-y-auto p-2 space-y-2">
-      {liveActivity.map((item) => (
-        <div 
-          key={item.id} 
-          className="bg-slate-50 rounded-xl p-3 text-sm animate-slide-in-bottom hover:bg-indigo-50 transition-colors group"
-        >
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-bold group-hover:scale-110 transition-transform">
-              {item.studentName.charAt(0)}
+      {/* Live Activity Feed */}
+      {showLiveFeed && liveActivity.length > 0 && (
+        <div className="fixed bottom-6 right-6 w-80 bg-white rounded-2xl shadow-2xl border border-indigo-100 overflow-hidden z-50 animate-slide-in-right">
+          <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-3 text-white flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <Activity size={16} className="animate-pulse" />
+              <span className="font-bold text-sm">Live Activity</span>
             </div>
-            <div className="flex-1">
-              <p className="font-semibold text-slate-800">{item.studentName}</p>
-              <p className="text-xs text-slate-500">{item.matricNo} • {item.courseCode}</p>
-              <p className="text-[10px] text-indigo-400 mt-1">{item.time}</p>
-            </div>
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+            <button 
+              onClick={() => setShowLiveFeed(false)}
+              className="hover:bg-white/20 p-1 rounded-lg transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="max-h-80 overflow-y-auto p-2 space-y-2">
+            {liveActivity.map((item) => (
+              <div 
+                key={item.id} 
+                className="bg-slate-50 rounded-xl p-3 text-sm animate-slide-in-bottom hover:bg-indigo-50 transition-colors group"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-bold group-hover:scale-110 transition-transform">
+                    {item.studentName.charAt(0)}
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-semibold text-slate-800">{item.studentName}</p>
+                    <p className="text-xs text-slate-500">{item.matricNo} • {item.courseCode}</p>
+                    <p className="text-[10px] text-indigo-400 mt-1">{item.time}</p>
+                  </div>
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-      ))}
-    </div>
-  </div>
-)}
+      )}
 
-{/* Add these styles to your component or global CSS */}
-<style jsx>{`
-  @keyframes numberPop {
-    0% {
-      transform: scale(1);
-    }
-    50% {
-      transform: scale(1.2);
-      color: #fff;
-    }
-    100% {
-      transform: scale(1);
-    }
-  }
-  
-  @keyframes scanLine {
-    0% {
-      top: 0%;
-      opacity: 0;
-    }
-    10% {
-      opacity: 1;
-    }
-    90% {
-      opacity: 1;
-    }
-    100% {
-      top: 100%;
-      opacity: 0;
-    }
-  }
-  
-  @keyframes slideInRight {
-    from {
-      opacity: 0;
-      transform: translateX(20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateX(0);
-    }
-  }
-  
-  @keyframes slideInBottom {
-    from {
-      opacity: 0;
-      transform: translateY(10px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-  
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
-  }
-  
-  .animate-number-pop {
-    animation: numberPop 0.3s ease-out;
-  }
-  
-  .animate-scan-line {
-    animation: scanLine 3s linear infinite;
-  }
-  
-  .animate-slide-in-right {
-    animation: slideInRight 0.3s ease-out;
-  }
-  
-  .animate-slide-in-bottom {
-    animation: slideInBottom 0.3s ease-out;
-  }
-  
-  .animate-fade-in {
-    animation: fadeIn 0.3s ease-out forwards;
-  }
-  
-  /* Tabular numbers for consistent width */
-  .tabular-nums {
-    font-variant-numeric: tabular-nums;
-  }
-`}</style>
-
-      {/* --- COURSE GRID WITH PAGINATION --- */}
+      {/* Course Grid */}
       <section className="space-y-6">
         <div className="flex items-center justify-between px-2">
           <div className="flex items-center gap-3">
@@ -690,7 +795,7 @@ useEffect(() => {
               ))}
             </div>
 
-            {/* --- PAGINATION CONTROLS --- */}
+            {/* Pagination */}
             {totalPages > 1 && (
               <div className="flex items-center justify-center gap-2 pt-8">
                 <button 
@@ -726,7 +831,6 @@ useEffect(() => {
         )}
       </section>
 
-      {/* --- MODALS (Enhanced Styling) --- */}
       {/* Course Modal */}
       {showCourseModal && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 z-[110] transition-all">
@@ -740,7 +844,6 @@ useEffect(() => {
               </button>
             </div>
             
-
             <form onSubmit={handleCourseSubmit} className="space-y-5">
               <div className="space-y-1">
                 <h3 className="text-2xl font-black text-slate-900">{editingCourse ? 'Modify Course' : 'Launch New Course'}</h3>
@@ -760,7 +863,7 @@ useEffect(() => {
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                   <div className="space-y-1.5">
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Code</label>
                     {courseForm.department.includes('MTBM') ? (
                       <select required value={courseForm.course_code} onChange={handleCourseCodeChange} className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 outline-none font-bold">
@@ -799,7 +902,8 @@ useEffect(() => {
         </div>
       )}
 
-      {/* Session/QR Modals - Consistent Premium Styling */}
+      {/* Session Modal */}
+      
       {showSessionModal && !showQRModal && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 z-[110]">
           <div className="bg-white rounded-t-[3rem] sm:rounded-[3rem] w-full max-w-md p-8 animate-in slide-in-from-bottom-10">
@@ -822,18 +926,42 @@ useEffect(() => {
                 <option value="">Select active course...</option>
                 {courses.map((c) => (<option key={c.id} value={c.id}>{c.course_code} - {c.course_title}</option>))}
               </select>
-              <button 
-                onClick={startSession} disabled={!selectedCourse} 
-                className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black shadow-xl hover:bg-black transition-all disabled:opacity-30 uppercase tracking-widest text-xs"
-              >
-                Launch QR Terminal
-              </button>
+
+              {/* In the QR modal, add location info */}
+{newSession?.location && (
+  <div className="mt-4 p-3 bg-blue-50 rounded-xl text-left">
+    <p className="text-xs font-medium text-blue-700 flex items-center gap-1">
+      <MapPin size={12} />
+      Session location
+    </p>
+    <p className="text-xs text-blue-600 mt-1">
+      {newSession.location.address || `${newSession.location.lat.toFixed(4)}, ${newSession.location.lng.toFixed(4)}`}
+    </p>
+    <p className="text-xs text-blue-500 mt-1">
+      Accuracy: ±{Math.round(newSession.location.accuracy)}m • Students must be within 200m
+    </p>
+  </div>
+)}
+            <button 
+  onClick={startSession} 
+  disabled={!selectedCourse || isCreatingSession} 
+  className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+>
+  {isCreatingSession ? (
+    <>
+      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+      <span>Creating session...</span>
+    </>
+  ) : (
+    'Generate QR Code'
+  )}
+</button>
             </div>
           </div>
         </div>
       )}
 
-  {/* QR Modal */}
+      {/* QR Modal */}
       {showQRModal && newSession && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4 z-[120]">
           <div className="bg-white rounded-[3rem] p-10 max-w-sm w-full text-center shadow-2xl relative">
@@ -872,8 +1000,63 @@ useEffect(() => {
           </div>
         </div>
       )}
+
+      {/* Manual Attendance Modal */}
+      <ManualAttendanceModal
+        isOpen={showManualModal}
+        onClose={() => setShowManualModal(false)}
+        courses={courses}
+        user={user}
+        profile={profile}
+        onSuccess={() => {
+          setShowManualModal(false);
+          refetch();
+        }}
+        supabase={supabase}
+        setError={setError}
+        setSuccess={setSuccess}
+        refetch={refetch}
+      />
+
+      {/* Styles */}
+      <style jsx>{`
+        @keyframes numberPop {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.2); color: #fff; }
+          100% { transform: scale(1); }
+        }
+        
+        @keyframes scanLine {
+          0% { top: 0%; opacity: 0; }
+          10% { opacity: 1; }
+          90% { opacity: 1; }
+          100% { top: 100%; opacity: 0; }
+        }
+        
+        @keyframes slideInRight {
+          from { opacity: 0; transform: translateX(20px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        
+        @keyframes slideInBottom {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        
+        .animate-number-pop { animation: numberPop 0.3s ease-out; }
+        .animate-scan-line { animation: scanLine 3s linear infinite; }
+        .animate-slide-in-right { animation: slideInRight 0.3s ease-out; }
+        .animate-slide-in-bottom { animation: slideInBottom 0.3s ease-out; }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        .tabular-nums { font-variant-numeric: tabular-nums; }
+      `}</style>
     </div>
   )
 }
 
-export default HocDashboard
+export default HocDashboard;

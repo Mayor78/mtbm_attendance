@@ -1,34 +1,40 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { 
-  ArrowLeft, Download, Calendar, Users, Clock, 
-  CheckCircle, FileText, RefreshCcw, ChevronRight,
-  MapPin, Map, Loader, BarChart2, Award, TrendingUp,
-  UserCheck, UserX, Eye, Filter
-} from 'lucide-react';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useCourseAttendance } from '../hooks/useAttendance';
 import { supabase } from '../lib/supabase';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-// Cache for location addresses (using plain object instead of Map)
+// Import components
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import AttendanceHeader from '../components/attendance/AttendanceHeader';
+import SessionSelector from '../components/attendance/SessionSelector';
+import SessionStats from '../components/attendance/SessionStats';
+import AttendanceRecordsList from '../components/attendance/AttendanceRecordsList';
+import StudentStatsCards from '../components/attendance/StudentStatsCards';
+import StudentFilters from '../components/attendance/StudentFilters';
+import StudentList from '../components/attendance/StudentList';
+import LocationSummary from '../components/attendance/LocationSummary';
+import StatCardMobile from '../components/attendance/StatCard';
+import { Clock, FileText, User } from 'lucide-react';
+
+// Cache for location addresses
 const locationCache = {};
 
 export const CourseAttendance = () => {
   const { courseId } = useParams();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { sessions, loading, error, refetch } = useCourseAttendance(courseId);
   const [selectedSession, setSelectedSession] = useState(null);
   const [courseInfo, setCourseInfo] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [locations, setLocations] = useState({});
   const [loadingLocations, setLoadingLocations] = useState({});
-  const [viewMode, setViewMode] = useState('sessions'); // 'sessions' or 'students'
+  const [viewMode, setViewMode] = useState('sessions');
   const [studentStats, setStudentStats] = useState([]);
-  const [sortBy, setSortBy] = useState('name'); // 'name', 'attendance', 'percentage'
-  const [filterAttendance, setFilterAttendance] = useState('all'); // 'all', 'high', 'medium', 'low'
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sortBy, setSortBy] = useState('name');
+  const [filterAttendance, setFilterAttendance] = useState('all');
 
   useEffect(() => {
     fetchCourseInfo();
@@ -52,6 +58,37 @@ export const CourseAttendance = () => {
     }
   }, [selectedSession]);
 
+  const handleRemoveFromSession = async (record) => {
+  try {
+    // Delete only this specific attendance record
+    const { error } = await supabase
+      .from('attendance_records')
+      .delete()
+      .eq('id', record.id);
+
+    if (error) throw error;
+
+    // Refresh the data
+    await refetch();
+    
+    // Update selected session by removing this record from the list
+    if (selectedSession) {
+      const updatedRecords = selectedSession.attendanceRecords?.filter(r => r.id !== record.id) || [];
+      setSelectedSession({
+        ...selectedSession,
+        attendanceRecords: updatedRecords
+      });
+    }
+
+    // Optional: Show success message
+    console.log('Student removed from session successfully');
+
+  } catch (error) {
+    console.error('Error removing student from session:', error);
+    alert('Failed to remove student from session: ' + error.message);
+  }
+};
+
   const fetchCourseInfo = async () => {
     const { data } = await supabase
       .from('courses')
@@ -62,7 +99,6 @@ export const CourseAttendance = () => {
   };
 
   const calculateStudentStats = () => {
-    // Use object instead of Map
     const studentMap = {};
     
     sessions.forEach(session => {
@@ -106,14 +142,12 @@ export const CourseAttendance = () => {
       });
     });
     
-    // Convert object to array
     const stats = Object.values(studentMap).map(student => ({
       ...student,
       attendancePercentage: sessions.length > 0 ? Math.round((student.totalPresent / sessions.length) * 100) : 0,
       attendanceGrade: getAttendanceGrade(sessions.length > 0 ? student.totalPresent / sessions.length : 0)
     }));
     
-    // Sort based on current sortBy
     const sortedStats = sortStudents(stats, sortBy);
     setStudentStats(sortedStats);
   };
@@ -128,14 +162,10 @@ export const CourseAttendance = () => {
   const sortStudents = (stats, sortKey) => {
     return [...stats].sort((a, b) => {
       switch(sortKey) {
-        case 'name':
-          return a.name.localeCompare(b.name);
-        case 'attendance':
-          return b.totalPresent - a.totalPresent;
-        case 'percentage':
-          return b.attendancePercentage - a.attendancePercentage;
-        default:
-          return a.name.localeCompare(b.name);
+        case 'name': return a.name.localeCompare(b.name);
+        case 'attendance': return b.totalPresent - a.totalPresent;
+        case 'percentage': return b.attendancePercentage - a.attendancePercentage;
+        default: return a.name.localeCompare(b.name);
       }
     });
   };
@@ -159,68 +189,70 @@ export const CourseAttendance = () => {
     setTimeout(() => setIsRefreshing(false), 600);
   };
 
-  const getHumanReadableAddress = async (records) => {
-    if (!records || !Array.isArray(records) || records.length === 0) return;
+ const getHumanReadableAddress = async (records) => {
+  if (!records || !Array.isArray(records) || records.length === 0) return;
+  
+  const recordsToGeocode = records.filter(record => {
+    if (!record?.location_lat || !record?.location_lng) return false;
+    const cacheKey = `${record.location_lat},${record.location_lng}`;
+    return !locationCache[cacheKey] && !loadingLocations[record.id];
+  });
+
+  if (recordsToGeocode.length === 0) return;
+
+  for (let i = 0; i < recordsToGeocode.length; i++) {
+    const record = recordsToGeocode[i];
     
-    const recordsToGeocode = records.filter(record => {
-      if (!record?.location_lat || !record?.location_lng) return false;
-      const cacheKey = `${record.location_lat},${record.location_lng}`;
-      return !locationCache[cacheKey] && !loadingLocations[record.id];
-    });
-
-    if (recordsToGeocode.length === 0) return;
-
-    for (let i = 0; i < recordsToGeocode.length; i++) {
-      const record = recordsToGeocode[i];
-      
-      if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 1100));
-      }
-      
-      setLoadingLocations(prev => ({ ...prev, [record.id]: true }));
-      
-      try {
-        const cacheKey = `${record.location_lat},${record.location_lng}`;
-        
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${record.location_lat}&lon=${record.location_lng}&zoom=18&addressdetails=1`,
-          {
-            headers: {
-              'User-Agent': 'UniversityAttendanceSystem/1.0'
-            }
-          }
-        );
-        
-        if (!response.ok) throw new Error('Failed to fetch location');
-        
-        const data = await response.json();
-        
-        let address = '';
-        if (data.address) {
-          const parts = [];
-          if (data.address.road) parts.push(data.address.road);
-          if (data.address.suburb) parts.push(data.address.suburb);
-          if (data.address.city || data.address.town || data.address.village) {
-            parts.push(data.address.city || data.address.town || data.address.village);
-          }
-          if (data.address.state) parts.push(data.address.state);
-          address = parts.join(', ');
-        }
-        
-        const displayAddress = address || data.display_name?.split(',').slice(0, 3).join(',') || 'Unknown location';
-        locationCache[cacheKey] = displayAddress;
-        setLocations(prev => ({ ...prev, [record.id]: displayAddress }));
-        
-      } catch (error) {
-        console.error('Error getting location address:', error);
-        const fallback = `${record.location_lat.toFixed(4)}°, ${record.location_lng.toFixed(4)}°`;
-        locationCache[`${record.location_lat},${record.location_lng}`] = fallback;
-        setLocations(prev => ({ ...prev, [record.id]: fallback }));
-      } finally {
-        setLoadingLocations(prev => ({ ...prev, [record.id]: false }));
-      }
+    if (i > 0) {
+      await new Promise(resolve => setTimeout(resolve, 1100));
     }
-  };
+    
+    setLoadingLocations(prev => ({ ...prev, [record.id]: true }));
+    
+    try {
+      const cacheKey = `${record.location_lat},${record.location_lng}`;
+      
+      // Use a CORS proxy
+      const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
+      const targetUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${record.location_lat}&lon=${record.location_lng}&zoom=18&addressdetails=1`;
+      
+      const response = await fetch(proxyUrl + targetUrl, {
+        headers: {
+          'User-Agent': 'UniversityAttendanceSystem/1.0'
+        }
+      });
+      
+      if (!response.ok) throw new Error('Failed to fetch location');
+      
+      const data = await response.json();
+      
+      let address = '';
+      if (data.address) {
+        const parts = [];
+        if (data.address.road) parts.push(data.address.road);
+        if (data.address.suburb) parts.push(data.address.suburb);
+        if (data.address.city || data.address.town || data.address.village) {
+          parts.push(data.address.city || data.address.town || data.address.village);
+        }
+        if (data.address.state) parts.push(data.address.state);
+        address = parts.join(', ');
+      }
+      
+      const displayAddress = address || data.display_name?.split(',').slice(0, 3).join(',') || 'Unknown location';
+      locationCache[cacheKey] = displayAddress;
+      setLocations(prev => ({ ...prev, [record.id]: displayAddress }));
+      
+    } catch (error) {
+      console.error('Error getting location address:', error);
+      // Fallback to coordinates
+      const fallback = `${record.location_lat.toFixed(4)}°, ${record.location_lng.toFixed(4)}°`;
+      locationCache[`${record.location_lat},${record.location_lng}`] = fallback;
+      setLocations(prev => ({ ...prev, [record.id]: fallback }));
+    } finally {
+      setLoadingLocations(prev => ({ ...prev, [record.id]: false }));
+    }
+  }
+};
 
   const exportSessionReport = () => {
     if (!selectedSession || !courseInfo) return;
@@ -237,11 +269,9 @@ export const CourseAttendance = () => {
     
     const doc = new jsPDF();
     
-    // Title
     doc.setFontSize(18);
     doc.text(`${courseInfo.course_code} - Session Attendance Report`, 14, 20);
     
-    // Course Info
     doc.setFontSize(11);
     doc.text(`Course: ${courseInfo.course_title}`, 14, 30);
     doc.text(`Date: ${new Date(selectedSession.created_at).toLocaleDateString('en-US', { 
@@ -255,7 +285,6 @@ export const CourseAttendance = () => {
     doc.text(`Total Present: ${selectedSession.attendanceRecords?.length || 0} students`, 14, 58);
     doc.text(`Generated: ${now.toLocaleString()}`, 14, 65);
     
-    // Attendance Records Table
     const tableRows = (selectedSession.attendanceRecords || []).map(record => [
       record.student_name || record.students?.profiles?.full_name || 'Unknown',
       record.matric_no || record.students?.matric_no || 'N/A',
@@ -289,11 +318,9 @@ export const CourseAttendance = () => {
     
     const doc = new jsPDF();
     
-    // Title
     doc.setFontSize(18);
     doc.text(`${courseInfo.course_code} - Student Attendance Report`, 14, 20);
     
-    // Course Info
     doc.setFontSize(11);
     doc.text(`Course: ${courseInfo.course_title}`, 14, 30);
     doc.text(`Total Sessions: ${sessions.length}`, 14, 37);
@@ -303,7 +330,6 @@ export const CourseAttendance = () => {
       : 0}%`, 14, 51);
     doc.text(`Generated: ${now.toLocaleString()}`, 14, 58);
     
-    // Students Table
     const tableRows = filteredStudents.map(s => [
       s.matricNo,
       s.name,
@@ -330,370 +356,142 @@ export const CourseAttendance = () => {
     doc.save(filename);
   };
 
-  const getAccuracyDescription = (accuracy) => {
-    if (!accuracy) return null;
-    if (accuracy < 10) return 'High accuracy';
-    if (accuracy < 30) return 'Medium accuracy';
-    if (accuracy < 100) return 'Low accuracy';
-    return 'Poor accuracy';
+  // Remove student from course
+  const handleRemoveStudent = async (student) => {
+    try {
+      // Delete all attendance records for this student in this course
+      const { error: recordsError } = await supabase
+        .from('attendance_records')
+        .delete()
+        .eq('student_id', student.id)
+        .in('session_id', sessions.map(s => s.id));
+
+      if (recordsError) throw recordsError;
+
+      // Delete course enrollment
+      const { error: enrollmentError } = await supabase
+        .from('course_enrollments')
+        .delete()
+        .eq('course_id', courseId)
+        .eq('student_id', student.id);
+
+      if (enrollmentError) throw enrollmentError;
+
+      // Refresh data
+      await refetch();
+      
+    } catch (error) {
+      console.error('Error removing student:', error);
+      alert('Failed to remove student: ' + error.message);
+    }
   };
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
-        <div className="w-10 h-10 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
-        <p className="text-slate-500 font-medium animate-pulse">Loading records...</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingSpinner />;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4 sm:space-y-6 pb-24">
       
-      {/* Navigation & Title - Mobile Optimized */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-start gap-2">
-          <Link 
-            to="/dashboard" 
-            className="mt-1 p-2 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm flex-shrink-0"
-          >
-            <ArrowLeft size={18} className="text-slate-600" />
-          </Link>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-lg sm:text-2xl font-bold text-slate-900 leading-tight truncate">
-              {courseInfo?.course_code}
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 font-medium truncate">
-              {courseInfo?.course_title}
-            </p>
-          </div>
-        </div>
-        
-        {/* Mobile-optimized view toggle */}
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex bg-slate-100 p-1 rounded-xl w-full">
-            <button
-              onClick={() => setViewMode('sessions')}
-              className={`flex-1 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1 ${
-                viewMode === 'sessions' 
-                  ? 'bg-white text-indigo-600 shadow-sm' 
-                  : 'text-slate-600'
-              }`}
-            >
-              <Calendar size={14} />
-              <span className="hidden xs:inline">Sessions</span>
-            </button>
-            <button
-              onClick={() => setViewMode('students')}
-              className={`flex-1 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1 ${
-                viewMode === 'students' 
-                  ? 'bg-white text-indigo-600 shadow-sm' 
-                  : 'text-slate-600'
-              }`}
-            >
-              <Users size={14} />
-              <span className="hidden xs:inline">Students</span>
-            </button>
-          </div>
-          <button
-            onClick={handleRefresh}
-            className="p-2 bg-white border border-slate-200 rounded-xl text-slate-700 hover:bg-slate-50 transition-all flex-shrink-0"
-          >
-            <RefreshCcw size={16} className={isRefreshing ? 'animate-spin' : ''} />
-          </button>
-        </div>
-      </div>
+      <AttendanceHeader
+        courseCode={courseInfo?.course_code}
+        courseTitle={courseInfo?.course_title}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        onRefresh={handleRefresh}
+        isRefreshing={isRefreshing}
+      />
 
-      {/* View Mode Content */}
       {viewMode === 'sessions' ? (
-        /* SESSIONS VIEW - Mobile Optimized */
         <>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-              Attendance Sessions
-            </label>
-            <div className="relative">
-              <select
-                value={selectedSession?.id || ''}
-                onChange={(e) => setSelectedSession(sessions.find(s => s.id === e.target.value))}
-                className="w-full bg-slate-50 border-none rounded-xl py-3 pl-4 pr-10 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 appearance-none transition-all"
-              >
-                <option value="">Select a session</option>
-                {sessions.map((session) => (
-                  <option key={session.id} value={session.id}>
-                    {new Date(session.created_at).toLocaleDateString('en-US', {year: "numeric" ,month: 'short', day: 'numeric' })}
-                    
-                    {session.is_active ? ' Active' : 'Ended'} 
-                    ({session.attendanceRecords?.length || 0})
-                  </option>
-                ))}
-              </select>
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                <ChevronRight size={16} className="rotate-90" />
-              </div>
-            </div>
-          </div>
+          <SessionSelector
+            sessions={sessions}
+            selectedSession={selectedSession}
+            onSessionChange={setSelectedSession}
+          />
 
-          {selectedSession && (
-            <div className="space-y-4">
-              {/* Stats Cards - Mobile Grid */}
-              <div className="grid grid-cols-2 gap-2">
-                <StatCardMobile 
-                  label="Present" 
-                  value={selectedSession.attendanceRecords?.length || 0} 
-                  icon={<Users size={16} className="text-indigo-600" />}
-                  color="bg-indigo-50"
-                />
-                <StatCardMobile 
-                  label="Status" 
-                  value={selectedSession.is_active ? 'Active' : 'Closed'} 
-                  icon={<div className={`w-2 h-2 rounded-full ${selectedSession.is_active ? 'bg-green-500 animate-pulse' : 'bg-slate-400'}`} />}
-                  color={selectedSession.is_active ? 'bg-green-50' : 'bg-slate-50'}
-                />
-                <StatCardMobile 
-                  label="Start" 
-                  value={new Date(selectedSession.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 
-                  icon={<Clock size={16} className="text-amber-600" />}
-                  color="bg-amber-50"
-                />
-                <button 
-                  onClick={exportSessionReport}
-                  className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 transition-all shadow-md group"
-                >
-                  <FileText size={16} className="mb-1 group-hover:scale-110 transition-transform" />
-                  <span className="text-[10px] uppercase font-bold">PDF</span>
-                </button>
-              </div>
 
-              {/* Attendance Records - Mobile Optimized Card View */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                <div className="p-4 border-b border-slate-50 flex justify-between items-center">
-                  <h3 className="font-bold text-sm text-slate-800">Attendance Records</h3>
-                  <span className="text-xs font-bold px-2 py-1 bg-slate-100 text-slate-600 rounded-full">
-                    {selectedSession.attendanceRecords?.length || 0} Present
-                  </span>
-                </div>
-                
-                {/* Mobile Card View - Visible on small screens */}
-                <div className="block sm:hidden divide-y divide-slate-100">
-                  {selectedSession.attendanceRecords?.map((record) => (
-                    <div key={record.id} className="p-4 space-y-2 hover:bg-slate-50">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-medium text-slate-900 text-sm">
-                            {record.student_name || record.students?.profiles?.full_name}
-                          </p>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            {record.matric_no || record.students?.matric_no}
-                          </p>
-                        </div>
-                        <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full">
-                          {new Date(record.scanned_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      {record.location_lat && (
-                        <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-slate-50 p-2 rounded-lg">
-                          <MapPin size={12} className="text-indigo-500 flex-shrink-0" />
-                          <span className="truncate">
-                            {locations[record.id] || 'Loading location...'}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+{selectedSession && (
+  <div className="space-y-4">
+    {/* Stats Cards - Mobile Grid */}
+    <div className="grid grid-cols-2 gap-2">
+      <StatCardMobile 
+        label="Present" 
+        value={selectedSession.attendanceRecords?.length || 0} 
+        icon={<User size={16} className="text-indigo-600" />}
+        color="bg-indigo-50"
+      />
+      <StatCardMobile 
+        label="Status" 
+        value={selectedSession.is_active ? 'Active' : 'Closed'} 
+        icon={<div className={`w-2 h-2 rounded-full ${selectedSession.is_active ? 'bg-green-500 animate-pulse' : 'bg-slate-400'}`} />}
+        color={selectedSession.is_active ? 'bg-green-50' : 'bg-slate-50'}
+      />
+      <StatCardMobile 
+        label="Start" 
+        value={new Date(selectedSession.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 
+        icon={<Clock size={16} className="text-amber-600" />}
+        color="bg-amber-50"
+      />
+      <button 
+        onClick={exportSessionReport}
+        className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 transition-all shadow-md group"
+      >
+        <FileText size={16} className="mb-1 group-hover:scale-110 transition-transform" />
+        <span className="text-[10px] uppercase font-bold">PDF</span>
+      </button>
+    </div>
 
-                {/* Desktop Table View - Hidden on mobile */}
-                <div className="hidden sm:block overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead className="bg-slate-50/50">
-                      <tr>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase">Student</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase">Matric No</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase">Time</th>
-                        <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase">Location</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {selectedSession.attendanceRecords?.map((record) => (
-                        <tr key={record.id} className="hover:bg-slate-50/50">
-                          <td className="px-4 py-3 text-sm">
-                            {record.student_name || record.students?.profiles?.full_name}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-slate-600">
-                            {record.matric_no || record.students?.matric_no}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-indigo-600">
-                            {new Date(record.scanned_at).toLocaleTimeString()}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-slate-600">
-                            {record.location_lat ? (
-                              locations[record.id] || 'Loading...'
-                            ) : (
-                              <span className="text-slate-400">No location</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
+    {/* Attendance Records */}
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="p-4 border-b border-slate-50 flex justify-between items-center">
+        <h3 className="font-bold text-sm text-slate-800">Attendance Records</h3>
+        <span className="text-xs font-bold px-2 py-1 bg-slate-100 text-slate-600 rounded-full">
+          {selectedSession.attendanceRecords?.length || 0} Present
+        </span>
+      </div>
+      
+      <AttendanceRecordsList
+        records={selectedSession.attendanceRecords}
+        locations={locations}
+  onRemoveFromSession={handleRemoveFromSession}
+  userRole={profile?.role}
+      />
+    </div>
+  </div>
+)}
         </>
       ) : (
-        /* STUDENTS VIEW - Mobile Optimized */
         <div className="space-y-4">
-          {/* Summary Stats - Mobile Grid */}
-          <div className="grid grid-cols-2 gap-2">
-            <StatCardMobile 
-              label="Total" 
-              value={studentStats.length} 
-              icon={<Users size={16} className="text-indigo-600" />}
-              color="bg-indigo-50"
-            />
-            <StatCardMobile 
-              label="Avg %" 
-              value={studentStats.length > 0 
-                ? Math.round(studentStats.reduce((acc, s) => acc + s.attendancePercentage, 0) / studentStats.length) + '%'
-                : '0%'} 
-              icon={<TrendingUp size={16} className="text-green-600" />}
-              color="bg-green-50"
-            />
-            <StatCardMobile 
-              label="Sessions" 
-              value={sessions.length} 
-              icon={<Calendar size={16} className="text-purple-600" />}
-              color="bg-purple-50"
-            />
-            <button
-              onClick={exportStudentReport}
-              className="flex flex-col items-center justify-center p-3 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-md"
-            >
-              <Download size={16} className="mb-1" />
-              <span className="text-[10px] uppercase font-bold">Export</span>
-            </button>
-          </div>
+          <StudentStatsCards
+            totalStudents={studentStats.length}
+            avgAttendance={studentStats.length > 0 
+              ? Math.round(studentStats.reduce((acc, s) => acc + s.attendancePercentage, 0) / studentStats.length)
+              : 0}
+            totalSessions={sessions.length}
+            onExport={exportStudentReport}
+          />
 
-          {/* Filters - Mobile Optimized */}
-          <div className="flex flex-wrap gap-2">
-            <select
-              value={sortBy}
-              onChange={(e) => handleSortChange(e.target.value)}
-              className="flex-1 min-w-[120px] px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="name">Sort: Name</option>
-              <option value="attendance">Sort: Count</option>
-              <option value="percentage">Sort: %</option>
-            </select>
-            
-            <select
-              value={filterAttendance}
-              onChange={(e) => setFilterAttendance(e.target.value)}
-              className="flex-1 min-w-[120px] px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="all">All Students</option>
-              <option value="high">High (75%+)</option>
-              <option value="medium">Medium (50-74%)</option>
-              <option value="low">Low (below 50%)</option>
-            </select>
-          </div>
+          <StudentFilters
+            sortBy={sortBy}
+            onSortChange={handleSortChange}
+            filterAttendance={filterAttendance}
+            onFilterChange={setFilterAttendance}
+          />
 
-          {/* Students List - Mobile Card View */}
-          <div className="space-y-2">
-            {filteredStudents.map((student) => (
-              <div key={student.id} className="bg-white rounded-xl border border-slate-100 p-4 shadow-sm">
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <h4 className="font-semibold text-slate-900 text-sm">{student.name}</h4>
-                    <p className="text-xs text-slate-500 mt-0.5">{student.matricNo}</p>
-                  </div>
-                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${student.attendanceGrade.bg} ${student.attendanceGrade.color}`}>
-                    {student.attendanceGrade.label}
-                  </span>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3 mt-3">
-                  <div>
-                    <p className="text-[10px] text-slate-400 uppercase">Present</p>
-                    <p className="text-sm font-semibold text-indigo-600">
-                      {student.totalPresent} <span className="text-xs text-slate-400">/ {sessions.length}</span>
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-slate-400 uppercase">Percentage</p>
-                    <div className="flex items-center gap-1">
-                      <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-indigo-600 rounded-full"
-                          style={{ width: `${student.attendancePercentage}%` }}
-                        />
-                      </div>
-                      <span className="text-xs font-medium text-slate-700">
-                        {student.attendancePercentage}%
-                      </span>
-                    </div>
-                  </div>
-                </div>
+          <StudentList
+            students={filteredStudents}
+            sessions={sessions}
+            onRemoveStudent={handleRemoveStudent}
+            userRole={profile?.role}
+          />
 
-                <div className="mt-2 pt-2 border-t border-slate-50 flex justify-between text-[10px] text-slate-400">
-                  <span>First: {new Date(student.firstAttendance).toLocaleDateString()}</span>
-                  <span>Last: {new Date(student.lastAttendance).toLocaleDateString()}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Location Summary - Mobile Optimized */}
-          {studentStats.some(s => s.locations.length > 0) && (
-            <div className="bg-indigo-50/50 rounded-xl border border-indigo-100 p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Map size={14} className="text-indigo-600" />
-                <h4 className="text-xs font-semibold text-indigo-900">Check-in Locations</h4>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {Array.from(new Set(
-                  studentStats
-                    .flatMap(s => s.locations)
-                    .filter(l => locations[l.time])
-                    .map(l => locations[l.time].split(',')[0].trim())
-                )).slice(0, 6).map((area, i) => (
-                  <span key={i} className="text-[10px] bg-white rounded-full px-2 py-1 text-indigo-700 border border-indigo-100">
-                    📍 {area}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
+          <LocationSummary
+            locations={locations}
+            studentStats={studentStats}
+          />
         </div>
       )}
     </div>
   );
 };
 
-// Mobile-optimized Stat Card
-const StatCardMobile = ({ label, value, icon, color }) => (
-  <div className={`bg-white p-3 rounded-xl border border-slate-100 shadow-sm flex items-center gap-2 ${color}`}>
-    <div className={`w-8 h-8 ${color} rounded-lg flex items-center justify-center`}>
-      {icon}
-    </div>
-    <div className="min-w-0 flex-1">
-      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</p>
-      <p className="text-sm font-bold text-slate-900 truncate">{value}</p>
-    </div>
-  </div>
-);
-
-// Desktop Stat Card (kept for reference)
-const StatCard = ({ label, value, icon, color }) => (
-  <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3">
-    <div className={`w-10 h-10 ${color} rounded-xl flex items-center justify-center`}>
-      {icon}
-    </div>
-    <div>
-      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</p>
-      <p className="text-lg font-bold text-slate-900 truncate">{value}</p>
-    </div>
-  </div>
-);
+export default CourseAttendance;
