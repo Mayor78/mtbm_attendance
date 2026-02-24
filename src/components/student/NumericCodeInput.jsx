@@ -32,6 +32,10 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
   const [locationError, setLocationError] = useState('');
   const [locationLoading, setLocationLoading] = useState(true);
   const [retryCount, setRetryCount] = useState(0);
+  const [locationMethod, setLocationMethod] = useState('gps');
+  const [ipLocation, setIpLocation] = useState(null);
+  const [wifiInfo, setWifiInfo] = useState(null);
+  const [useManualLocation, setUseManualLocation] = useState(false);
   
   const isMounted = useRef(true);
   const isSubmitting = useRef(false);
@@ -49,10 +53,51 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
     };
   }, []);
 
+  // Get IP-based location as fallback
+  const getIpLocation = async () => {
+    try {
+      const response = await fetch('https://ipapi.co/json/');
+      const data = await response.json();
+      return {
+        lat: data.latitude,
+        lng: data.longitude,
+        accuracy: 5000, // IP accuracy is low
+        city: data.city,
+        region: data.region,
+        country: data.country_name,
+        method: 'ip'
+      };
+    } catch (error) {
+      console.error('IP location error:', error);
+      return null;
+    }
+  };
+
+  // Get WiFi info (if available)
+  const getWifiInfo = () => {
+    if (navigator.connection) {
+      return {
+        type: navigator.connection.type,
+        effectiveType: navigator.connection.effectiveType,
+        downlink: navigator.connection.downlink,
+        rtt: navigator.connection.rtt
+      };
+    }
+    return null;
+  };
+
+  // Enhanced location capture
   const getCurrentLocation = () => {
     if (!navigator.geolocation) {
       setLocationError('Geolocation not supported');
-      setLocationLoading(false);
+      getIpLocation().then(ipLoc => {
+        if (ipLoc) {
+          setIpLocation(ipLoc);
+          setLocation(ipLoc);
+          setLocationMethod('ip');
+          setLocationLoading(false);
+        }
+      });
       return;
     }
 
@@ -60,21 +105,32 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
     
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        if (isMounted.current) {
-          setLocation({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-            accuracy: position.coords.accuracy
-          });
-          setLocationError('');
-          setLocationLoading(false);
-        }
+        setLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          method: 'gps',
+          timestamp: new Date().toISOString()
+        });
+        setWifiInfo(getWifiInfo());
+        setLocationError('');
+        setLocationLoading(false);
       },
       (err) => {
-        if (isMounted.current) {
-          setLocationError('Location access denied');
+        console.warn('GPS error:', err);
+        // Try IP fallback
+        getIpLocation().then(ipLoc => {
+          if (ipLoc) {
+            setIpLocation(ipLoc);
+            setLocation(ipLoc);
+            setLocationMethod('ip');
+            setLocationError('Using approximate location (GPS unavailable)');
+          } else {
+            setLocationError('Location unavailable. You can manually confirm your location.');
+            setUseManualLocation(true);
+          }
           setLocationLoading(false);
-        }
+        });
       },
       {
         enableHighAccuracy: true,
@@ -82,6 +138,20 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
         maximumAge: 0
       }
     );
+  };
+
+  // Manual location confirmation
+  const confirmManualLocation = () => {
+    setUseManualLocation(false);
+    setLocation({
+      lat: 0,
+      lng: 0,
+      accuracy: 999999,
+      method: 'manual',
+      confirmed: true,
+      timestamp: new Date().toISOString()
+    });
+    setLocationError('');
   };
 
   const handleCodeChange = (index, value) => {
@@ -255,9 +325,9 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
           )}
         </div>
 
-        {/* Location Status */}
+        {/* Location Status - Single unified display */}
         <div className={`flex items-center p-3 rounded-lg ${
-          location ? 'bg-green-50' : locationError ? 'bg-red-50' : 'bg-yellow-50'
+          location ? 'bg-green-50' : useManualLocation ? 'bg-yellow-50' : locationError ? 'bg-red-50' : 'bg-yellow-50'
         }`}>
           {locationLoading ? (
             <>
@@ -267,10 +337,31 @@ const NumericCodeInput = ({ onClose, onSuccess, onError }) => {
           ) : location ? (
             <>
               <MapPin className="text-green-600 mr-2" size={20} />
-              <span className="text-sm text-green-700">
-                Location captured (±{Math.round(location.accuracy)}m)
-              </span>
+              <div className="flex-1">
+                <span className="text-sm text-green-700">
+                  {location.method === 'gps' ? 'GPS location' : 
+                   location.method === 'ip' ? 'Approximate location' : 
+                   'Manual confirmation'}
+                </span>
+                <p className="text-xs text-green-600">
+                  Accuracy: ±{Math.round(location.accuracy)}m
+                  {location.method === 'ip' && ' (IP-based)'}
+                </p>
+              </div>
             </>
+          ) : useManualLocation ? (
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center">
+                <AlertCircle className="text-yellow-600 mr-2" size={20} />
+                <span className="text-sm text-yellow-700">Location unavailable</span>
+              </div>
+              <button
+                onClick={confirmManualLocation}
+                className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1 rounded-lg hover:bg-yellow-200"
+              >
+                Confirm Manually
+              </button>
+            </div>
           ) : (
             <>
               <AlertCircle className="text-red-600 mr-2" size={20} />
