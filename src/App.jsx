@@ -11,10 +11,12 @@ import { Layout } from './components/common/layouts/Layout'
 import StudentDashboard from './components/student/StudentDashboard'
 import { ProtectedRoute } from './components/common/layouts/ProtectedRoute'
 
-import { LoginPage } from './pages/LoginPage'
+
 import HocDashboard from './components/lecturer/HocDashboard'
 import { CourseAttendance } from './pages/CourseAttendance'
 import StudentProfile from './pages/StudentProfile'
+import LoginPage from './pages/LoginPage'
+import { LecturerDashboard } from './pages/LecturerDashboard'
 
 
 const DashboardRouter = () => {
@@ -23,6 +25,7 @@ const DashboardRouter = () => {
   if (role === 'student') return <StudentDashboard />
 //   if (role === 'lecturer') return <LecturerDashboard />
   if (role === 'hoc') return <HocDashboard /> // HOC uses same dashboard as lecturer
+   if (role === 'lecturer') return <LecturerDashboard/>
   if (role === 'admin') return <div>Admin Dashboard (Coming Soon)</div>
   
   return <Navigate to="/login" />

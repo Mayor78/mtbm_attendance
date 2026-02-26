@@ -58,6 +58,8 @@ export const CourseAttendance = () => {
     }
   }, [selectedSession]);
 
+  
+
   const handleRemoveFromSession = async (record) => {
   try {
     // Delete only this specific attendance record

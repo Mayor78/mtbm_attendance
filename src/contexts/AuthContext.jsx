@@ -10,13 +10,15 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [student, setStudent] = useState(null)
+  const [lecturer, setLecturer] = useState(null)
   const [role, setRole] = useState(null)
   const [loading, setLoading] = useState(true)
   
   // Cache refs to store data and timestamps
   const cache = useRef({
     profile: { data: null, timestamp: 0 },
-    student: { data: null, timestamp: 0 }
+    student: { data: null, timestamp: 0 },
+    lecturer: { data: null, timestamp: 0 }
   })
 
   const isCacheValid = (type) => {
@@ -33,8 +35,11 @@ export const AuthProvider = ({ children }) => {
         setProfile(cachedProfile)
         setRole(cachedProfile.role)
         
+        // Fetch role-specific data based on cached role
         if (cachedProfile.role === 'student') {
-          await fetchStudent(userId, true) // Pass true to indicate from cache
+          await fetchStudent(userId, true)
+        } else if (cachedProfile.role === 'lecturer') {
+          await fetchLecturer(userId, true)
         } else {
           setLoading(false)
         }
@@ -70,8 +75,11 @@ export const AuthProvider = ({ children }) => {
         setProfile(data)
         setRole(data.role)
         
+        // Fetch role-specific data
         if (data.role === 'student') {
           await fetchStudent(userId)
+        } else if (data.role === 'lecturer') {
+          await fetchLecturer(userId)
         } else {
           setLoading(false)
         }
@@ -90,7 +98,7 @@ export const AuthProvider = ({ children }) => {
 
   const fetchStudent = async (userId, fromCache = false) => {
     try {
-      // Check cache first (unless we're already coming from cache)
+      // Check cache first
       if (!fromCache && isCacheValid('student') && cache.current.student.data?.user_id === userId) {
         console.log('📦 Using cached student')
         setStudent(cache.current.student.data)
@@ -126,24 +134,64 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
-  // Function to manually invalidate cache (call after updates)
+  const fetchLecturer = async (userId, fromCache = false) => {
+    try {
+      // Check cache first
+      if (!fromCache && isCacheValid('lecturer') && cache.current.lecturer.data?.user_id === userId) {
+        console.log('📦 Using cached lecturer')
+        setLecturer(cache.current.lecturer.data)
+        setLoading(false)
+        return
+      }
+
+      console.log('🌐 Fetching lecturer from DB')
+      const { data, error } = await supabase
+        .from('lecturers')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle()
+
+      if (error) {
+        console.error('Error fetching lecturer:', error)
+        setLecturer(null)
+      } else if (data) {
+        // Update cache
+        cache.current.lecturer = {
+          data,
+          timestamp: Date.now()
+        }
+        setLecturer(data)
+      } else {
+        setLecturer(null)
+      }
+    } catch (error) {
+      console.error('Error in fetchLecturer:', error)
+      setLecturer(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Function to manually invalidate cache
   const invalidateCache = (type) => {
     if (type) {
       cache.current[type] = { data: null, timestamp: 0 }
     } else {
       cache.current = {
         profile: { data: null, timestamp: 0 },
-        student: { data: null, timestamp: 0 }
+        student: { data: null, timestamp: 0 },
+        lecturer: { data: null, timestamp: 0 }
       }
     }
   }
 
-  // Function to refresh data (bypass cache)
+  // Function to refresh data
   const refreshData = async () => {
     if (!user) return
     
     invalidateCache('profile')
     invalidateCache('student')
+    invalidateCache('lecturer')
     await fetchProfile(user.id)
   }
 
@@ -179,21 +227,25 @@ export const AuthProvider = ({ children }) => {
       setUser(session?.user ?? null)
       
       if (session?.user) {
-        // Clear cache on new sign in
         if (event === 'SIGNED_IN') {
           invalidateCache()
           setTimeout(async () => {
             if (mounted) await fetchProfile(session.user.id)
           }, 1500)
         } else if (event === 'TOKEN_REFRESHED') {
-          // Token refreshed, but user data same - use cache
           if (isCacheValid('profile')) {
             setProfile(cache.current.profile.data)
             setRole(cache.current.profile.data?.role)
+            
             if (cache.current.profile.data?.role === 'student' && isCacheValid('student')) {
               setStudent(cache.current.student.data)
+              setLoading(false)
+            } else if (cache.current.profile.data?.role === 'lecturer' && isCacheValid('lecturer')) {
+              setLecturer(cache.current.lecturer.data)
+              setLoading(false)
+            } else {
+              setLoading(false)
             }
-            setLoading(false)
           } else {
             await fetchProfile(session.user.id)
           }
@@ -203,6 +255,7 @@ export const AuthProvider = ({ children }) => {
       } else {
         setProfile(null)
         setStudent(null)
+        setLecturer(null)
         setRole(null)
         setLoading(false)
       }
@@ -228,7 +281,6 @@ export const AuthProvider = ({ children }) => {
   const signOut = async () => {
     setLoading(true)
     try {
-      // Clear cache on sign out
       invalidateCache()
       await supabase.auth.signOut()
     } catch (error) {
@@ -242,13 +294,14 @@ export const AuthProvider = ({ children }) => {
     <AuthContext.Provider value={{ 
       user, 
       profile, 
-      student, 
+      student,
+      lecturer, 
       role, 
       loading, 
       signIn, 
       signOut,
-      refreshData, // Expose refresh function for manual updates
-      invalidateCache // Expose cache invalidation if needed
+      refreshData,
+      invalidateCache
     }}>
       {children}
     </AuthContext.Provider>

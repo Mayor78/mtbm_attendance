@@ -64,6 +64,7 @@ const ManualAttendanceModal = ({
     }
   };
 
+  
   const fetchStudentsForCourse = async (courseId) => {
     try {
       setManualLoading(true);
