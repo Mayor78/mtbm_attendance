@@ -198,92 +198,141 @@ export const HocDashboard = () => {
     }
   };
 
-  const startSession = async () => {
-    if (!selectedCourse) return;
+const startSession = async () => {
+  if (!selectedCourse) return;
+  
+  try {
+    setError('');
+    setIsCreatingSession(true);
+
+    const hocLocation = await getCurrentLocation();
     
-    try {
-      setError('');
-      setIsCreatingSession(true);
-
-      const hocLocation = await getCurrentLocation();
-      
-      if (!hocLocation) {
-        throw new Error('Cannot create session without location. Please enable GPS to set the attendance boundary.');
-      }
-
-      // Verify course matches HOC's department and level
-      const { data: course } = await supabase
-        .from('courses')
-        .select('department, level')
-        .eq('id', selectedCourse)
-        .single();
-
-      if (course.department !== hocInfo?.department) {
-        throw new Error(`You can only create sessions for ${hocInfo?.department} department courses.`);
-      }
-
-      if (course.level !== hocInfo?.level) {
-        throw new Error(`You can only create sessions for ${hocInfo?.level} level courses.`);
-      }
-      
-      const token = crypto.randomUUID();
-      const numeric_code = Math.floor(100000 + Math.random() * 900000).toString();
-      const expires_at = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-      
-      const { data, error } = await supabase
-        .from('attendance_sessions')
-        .insert({
-          course_id: selectedCourse,
-          created_by: user.id,
-          token: token,
-          start_time: new Date().toISOString(),
-          expires_at: expires_at,
-          is_active: true,
-          numeric_code: numeric_code,
-          allowed_location_lat: hocLocation.lat,
-          allowed_location_lng: hocLocation.lng,
-          allowed_radius_meters: 500,
-          strict_location: true
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      if (data) {
-        const course = courses.find(c => c.id === selectedCourse);
-        
-        setSuccess(`Session started at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
-        
-        setNewSession({ 
-          ...data, 
-          course_code: course?.course_code, 
-          course_title: course?.course_title,
-          location: hocLocation
-        });
-        
-        setActiveSessions(prev => ({
-          ...prev,
-          [selectedCourse]: data
-        }));
-        
-        setShowQRModal(true);
-        setShowSessionModal(false);
-        refetch();
-      }
-    } catch (error) { 
-      console.error('Start session error:', error);
-      setError(error.message || 'Failed to start session.'); 
-    } finally {
-      setIsCreatingSession(false);
+    if (!hocLocation) {
+      throw new Error('Cannot create session without location. Please enable GPS to set the attendance boundary.');
     }
-  };
 
+    // Verify course matches HOC's department and level
+    const { data: course } = await supabase
+      .from('courses')
+      .select('department, level')
+      .eq('id', selectedCourse)
+      .single();
+
+    if (course.department !== hocInfo?.department) {
+      throw new Error(`You can only create sessions for ${hocInfo?.department} department courses.`);
+    }
+
+    if (course.level !== hocInfo?.level) {
+      throw new Error(`You can only create sessions for ${hocInfo?.level} level courses.`);
+    }
+    
+    const token = crypto.randomUUID();
+    const numeric_code = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Set expiry to 10 minutes from now
+    const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
+    
+    const { data, error } = await supabase
+      .from('attendance_sessions')
+      .insert({
+        course_id: selectedCourse,
+        created_by: user.id,
+        token: token,
+        start_time: new Date().toISOString(),
+        expires_at: expires_at,
+        is_active: true,
+        numeric_code: numeric_code,
+        allowed_location_lat: hocLocation.lat,
+        allowed_location_lng: hocLocation.lng,
+        allowed_radius_meters: 500,
+        strict_location: true
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    if (data) {
+      const course = courses.find(c => c.id === selectedCourse);
+      
+      setSuccess(`Session started for 10 minutes at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
+      
+      setNewSession({ 
+        ...data, 
+        course_code: course?.course_code, 
+        course_title: course?.course_title,
+        location: hocLocation
+      });
+      
+      setActiveSessions(prev => ({
+        ...prev,
+        [selectedCourse]: data
+      }));
+      
+      setShowQRModal(true);
+      setShowSessionModal(false);
+      refetch();
+
+      // Auto-end session after 10 minutes (local timeout)
+      setTimeout(() => {
+        autoEndSession(data.id);
+      }, 10 * 60 * 1000); // 10 minutes in milliseconds
+    }
+  } catch (error) { 
+    console.error('Start session error:', error);
+    setError(error.message || 'Failed to start session.'); 
+  } finally {
+    setIsCreatingSession(false);
+  }
+};
+
+
+
+  const autoEndSession = async (sessionId) => {
+  try {
+    console.log('⏰ Auto-ending session:', sessionId);
+    
+    // Check if session is still active before ending
+    const { data: session } = await supabase
+      .from('attendance_sessions')
+      .select('is_active')
+      .eq('id', sessionId)
+      .single();
+
+    if (session && session.is_active) {
+      await supabase
+        .from('attendance_sessions')
+        .update({ is_active: false })
+        .eq('id', sessionId);
+
+      console.log('✅ Session auto-ended successfully');
+      
+      // Refresh active sessions
+      checkActiveSessions();
+      refetch();
+
+      // Show notification
+      setSuccess('Session ended automatically (10 minutes elapsed)');
+    }
+  } catch (error) {
+    console.error('Error auto-ending session:', error);
+  }
+};
   const endSession = async (id) => {
-    await supabase.from('attendance_sessions').update({ is_active: false }).eq('id', id);
+  try {
+    await supabase
+      .from('attendance_sessions')
+      .update({ is_active: false })
+      .eq('id', id);
+    
+    setSuccess('Session ended manually');
     checkActiveSessions(); 
     refetch();
-  };
+  } catch (error) {
+    console.error('Error ending session:', error);
+    setError('Failed to end session');
+  }
+};
 
   const downloadQR = () => {
     const canvas = document.querySelector('canvas');

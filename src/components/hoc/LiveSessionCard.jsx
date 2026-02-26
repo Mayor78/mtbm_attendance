@@ -1,5 +1,10 @@
-import React from 'react';
+import  { useState, useEffect } from 'react';
 import { QrCode, X } from 'lucide-react';
+
+
+
+
+
 
 const LiveSessionCard = ({ 
   session, 
@@ -9,12 +14,39 @@ const LiveSessionCard = ({
   onEndSession, 
   onShowQR 
 }) => {
+
+    const [timeRemaining, setTimeRemaining] = useState('');
+
+useEffect(() => {
+  if (session?.expires_at) {
+    const interval = setInterval(() => {
+      const now = new Date();
+      const expiry = new Date(session.expires_at);
+      const diffMs = expiry - now;
+      
+      if (diffMs <= 0) {
+        setTimeRemaining('Expired');
+        clearInterval(interval);
+      } else {
+        const mins = Math.floor(diffMs / 60000);
+        const secs = Math.floor((diffMs % 60000) / 1000);
+        setTimeRemaining(`${mins}:${secs.toString().padStart(2, '0')}`);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }
+}, [session]);
+
   if (!session || !course) return null;
 
   // Safely filter live activity for this course
   const courseActivities = Array.isArray(liveActivity) 
     ? liveActivity.filter(a => a?.courseCode === course?.course_code)
     : [];
+
+
+   
 
   return (
     <div className="bg-indigo-600 rounded-3xl p-5 text-white shadow-xl shadow-indigo-200 overflow-hidden relative group hover:shadow-2xl transition-all duration-300">
@@ -78,6 +110,11 @@ const LiveSessionCard = ({
               </span>
             </div>
           )}
+          {timeRemaining && (
+  <div className="text-xs text-white/80 mt-1">
+    ⏱️ {timeRemaining} remaining
+  </div>
+)}
           
           <button 
             onClick={() => onShowQR(session, course)}

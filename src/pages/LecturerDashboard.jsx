@@ -6,28 +6,33 @@ import {
   Calendar, Clock, CheckCircle, XCircle, Eye, Filter,
   BarChart2, GraduationCap, RefreshCw, ChevronRight,
   UserCheck, UserX, FileText, Settings, Layers,
-  School, BookMarked, PieChart
+  School, BookMarked, PieChart, Sparkles
 } from 'lucide-react';
 
 // Import components
 import CourseGroup from '../components/lecturer/CourseGroup';
 import DepartmentOverview from '../components/lecturer/DepartmentOverview';
 import TeachingSchedule from '../components/lecturer/TeachingSchedule';
+import SessionOverview from '../components/lecturer/SessionOverview';
 import PerformanceMetrics from '../components/lecturer/PerformanceMetrics';
 import QuickStats from '../components/lecturer/QuickStats';
 import PendingApprovals from '../components/lecturer/PendingApprovals';
 import RecentActivity from '../components/lecturer/RecentActivity';
-import StudentOverview from '../components/lecturer/StudentOverview'; // Import StudentOverview
+import StudentOverview from '../components/lecturer/StudentOverview';
 
 const CourseCard = ({ course }) => (
-  <div className="bg-white border border-slate-200 rounded-lg p-4 hover:border-indigo-200 transition-colors">
+  <div className="group bg-white border border-gray-100 rounded-2xl p-5 hover:shadow-lg hover:shadow-indigo-500/5 hover:border-indigo-100 transition-all cursor-pointer">
     <div className="flex justify-between items-start">
-      <div>
-        <h3 className="font-medium text-slate-900">{course.course_code}</h3>
-        <p className="text-sm text-slate-600 mt-1">{course.course_title}</p>
-        <p className="text-xs text-slate-400 mt-1">{course.department} • Level {course.level}</p>
+      <div className="space-y-1">
+        <h3 className="font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">{course.course_code}</h3>
+        <p className="text-sm font-medium text-gray-600 leading-snug">{course.course_title}</p>
+        <div className="flex items-center gap-2 pt-2">
+          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-tight">{course.department}</span>
+          <span className="w-1 h-1 rounded-full bg-gray-200" />
+          <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded">Level {course.level}</span>
+        </div>
       </div>
-      <span className="text-xs px-2 py-1 bg-indigo-50 text-indigo-600 rounded-full">
+      <span className="text-[10px] font-black px-2.5 py-1 bg-gray-900 text-white rounded-lg uppercase tracking-widest">
         {course.semester || 'N/A'}
       </span>
     </div>
@@ -43,12 +48,12 @@ export const LecturerDashboard = () => {
     error: hookError, 
     stats, 
     refetch,
-    getAllDepartmentStudents  // Get the function from hook
+    getAllDepartmentStudents 
   } = useLecturerData(lecturer?.id);  
 
   const [selectedGroup, setSelectedGroup] = useState('all');
   const [dateRange, setDateRange] = useState('week');
-  const [showStudentOverview, setShowStudentOverview] = useState(false); // State for toggling student view
+  const [showStudentOverview, setShowStudentOverview] = useState(false);
 
   const filterOptions = [
     { id: 'all', label: 'All Courses', icon: Layers },
@@ -65,120 +70,145 @@ export const LecturerDashboard = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <div className="relative">
+            <div className="h-12 w-12 border-4 border-indigo-50 rounded-full" />
+            <div className="absolute top-0 h-12 w-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+        </div>
+        <p className="text-sm font-bold text-gray-400 animate-pulse uppercase tracking-widest">Initializing Dashboard...</p>
       </div>
     );
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8 bg-gray-50/30 min-h-screen">
       {/* Error Display */}
       {hookError && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-          {hookError}
+        <div className="bg-rose-50 border border-rose-100 text-rose-700 px-4 py-3 rounded-2xl flex items-center gap-3">
+          <AlertCircle size={18} />
+          <p className="text-sm font-medium">{hookError}</p>
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Welcome, {profile?.full_name?.split(' ')[0] || 'Lecturer'}
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {lecturer?.department || 'Academic Staff'} • Staff ID: {lecturer?.staff_id || 'N/A'}
-          </p>
-          <div className="flex flex-wrap gap-2 mt-2">
-            {stats.departments.map(dept => (
-              <span key={dept} className="text-xs px-2 py-1 bg-indigo-50 text-indigo-600 rounded-full">
-                {dept}
-              </span>
-            ))}
-            {stats.levels.map(level => (
-              <span key={level} className="text-xs px-2 py-1 bg-green-50 text-green-600 rounded-full">
-                Level {level}
-              </span>
-            ))}
-          </div>
+      {/* Header Section */}
+      <div className="bg-white border border-gray-100 rounded-[2.5rem] p-8 shadow-sm relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-8 opacity-5">
+            <Sparkles size={120} className="text-indigo-600" />
         </div>
         
-        <div className="flex items-center gap-3">
-          <select
-            value={dateRange}
-            onChange={(e) => setDateRange(e.target.value)}
-            className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
-            <option value="semester">This Semester</option>
-          </select>
-          <button
-            onClick={refetch}
-            className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50"
-            title="Refresh Data"
-          >
-            <RefreshCw size={18} />
-          </button>
+        <div className="relative z-10 flex flex-col md:flex-row md:items-end md:justify-between gap-6">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+                <span className="h-2 w-8 bg-indigo-600 rounded-full" />
+                <h1 className="text-3xl font-black text-gray-900 tracking-tight">
+                  Hello, {profile?.full_name?.split(' ')[0] || 'Lecturer'}!
+                </h1>
+            </div>
+            <p className="text-gray-500 font-medium max-w-md">
+              Managing <span className="text-indigo-600 font-bold">{courses.length} courses</span> across {stats.departments.length} departments today.
+            </p>
+            <div className="flex flex-wrap gap-2 mt-4">
+              {stats.departments.map(dept => (
+                <span key={dept} className="text-[10px] font-bold px-3 py-1 bg-white border border-gray-100 text-gray-600 rounded-full shadow-sm">
+                  {dept}
+                </span>
+              ))}
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2 bg-gray-50 p-1.5 rounded-2xl border border-gray-100">
+            <select
+              value={dateRange}
+              onChange={(e) => setDateRange(e.target.value)}
+              className="pl-3 pr-8 py-2 bg-transparent text-sm font-bold text-gray-700 focus:outline-none appearance-none cursor-pointer"
+            >
+              <option value="week">Weekly View</option>
+              <option value="month">Monthly View</option>
+              <option value="semester">Full Semester</option>
+            </select>
+            <button
+              onClick={refetch}
+              className="p-2.5 bg-white border border-gray-200 rounded-xl hover:shadow-md hover:text-indigo-600 transition-all"
+              title="Refresh Data"
+            >
+              <RefreshCw size={18} />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Quick Stats */}
+      {/* Analytics Summary */}
       <QuickStats stats={stats} />
 
-      {/* Department Students Toggle Button */}
-      <div className="flex justify-end">
+      {/* View Toggle */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-black text-gray-900">Academic Hub</h2>
         <button
           onClick={() => setShowStudentOverview(!showStudentOverview)}
-          className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm hover:bg-gray-50 transition-colors"
+          className={`flex items-center gap-2 px-6 py-3 rounded-2xl text-sm font-black transition-all shadow-lg ${
+            showStudentOverview 
+              ? 'bg-gray-900 text-white shadow-gray-200' 
+              : 'bg-white text-indigo-600 border border-indigo-50 shadow-indigo-100 hover:shadow-indigo-200'
+          }`}
         >
-          <Users size={16} className={showStudentOverview ? 'text-indigo-600' : 'text-gray-600'} />
-          <span className={showStudentOverview ? 'text-indigo-600 font-medium' : 'text-gray-700'}>
-            {showStudentOverview ? 'Hide Department Students' : 'View Department Students'}
-          </span>
+          {showStudentOverview ? <UserX size={18} /> : <UserCheck size={18} />}
+          {showStudentOverview ? 'Close Student List' : 'Department Students'}
         </button>
       </div>
 
+        <div className="bg-white border border-gray-100 rounded-[2.5rem] p-1 overflow-hidden shadow-sm">
+                <div className="p-6">
+                    <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest flex items-center gap-2">
+                        <PieChart size={16} className="text-indigo-600" />
+                        Live Sessions
+                    </h3>
+                </div>
+                <SessionOverview courses={courses} lecturerId={lecturer?.id} />
+            </div>
+
       {/* Student Overview Section */}
       {showStudentOverview && (
-        <StudentOverview 
-          lecturerId={lecturer?.id}
-          courses={courses}
-          getAllDepartmentStudents={getAllDepartmentStudents} // Pass the function
-        />
+        <div className="animate-in fade-in slide-in-from-top-4 duration-500">
+          <StudentOverview 
+            lecturerId={lecturer?.id}
+            courses={courses}
+            getAllDepartmentStudents={getAllDepartmentStudents}
+          />
+        </div>
       )}
 
-      {/* Filter Tabs */}
+      {/* Navigation Tabs */}
       {Object.keys(groupedCourses).length > 0 && (
-        <div className="flex overflow-x-auto gap-2 pb-2">
+        <div className="flex overflow-x-auto gap-3 pb-2 no-scrollbar">
           {filterOptions.map(option => (
             <button
               key={option.id}
               onClick={() => setSelectedGroup(option.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+              className={`flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${
                 selectedGroup === option.id
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                  ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200 translate-y-[-2px]'
+                  : 'bg-white text-gray-400 hover:text-gray-600 border border-gray-100'
               }`}
             >
-              <option.icon size={16} />
-              {option.label.length > 30 ? option.label.substring(0, 30) + '...' : option.label}
+              <option.icon size={14} strokeWidth={3} />
+              {option.label}
             </button>
           ))}
         </div>
       )}
 
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column - Courses and Groups */}
-        <div className="lg:col-span-2 space-y-6">
+      {/* Dashboard Content Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        {/* Main Feed: Courses */}
+        <div className="lg:col-span-8 space-y-6">
           {Object.keys(groupedCourses).length === 0 ? (
-            <div className="bg-white rounded-xl p-8 text-center border border-slate-200">
-              <BookOpen size={40} className="mx-auto text-slate-300 mb-3" />
-              <h3 className="text-lg font-medium text-slate-900">No Courses Found</h3>
-              <p className="text-sm text-slate-500 mt-1">
-                There are no courses in the system yet.
-              </p>
+            <div className="bg-white rounded-3xl p-16 text-center border border-dashed border-gray-200">
+              <div className="bg-gray-50 h-20 w-20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <BookOpen size={32} className="text-gray-300" />
+              </div>
+              <h3 className="text-xl font-black text-gray-900">No Assigned Courses</h3>
+              <p className="text-gray-500 mt-2 font-medium">Your course list will appear here once assigned.</p>
             </div>
           ) : selectedGroup === 'all' ? (
             Object.entries(groupedCourses).map(([key, group]) => (
@@ -189,12 +219,17 @@ export const LecturerDashboard = () => {
               />
             ))
           ) : (
-            <div className="space-y-4">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <BookMarked size={20} className="text-indigo-600" />
-                {selectedGroup}
-              </h2>
-              <div className="grid grid-cols-1 gap-4">
+            <div className="space-y-6 animate-in fade-in duration-500">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-black flex items-center gap-3 text-gray-900 uppercase tracking-tight">
+                  <div className="h-8 w-1 bg-indigo-600 rounded-full" />
+                  {selectedGroup}
+                </h2>
+                <span className="text-xs font-bold text-gray-400 bg-gray-100 px-3 py-1 rounded-full">
+                  {groupedCourses[selectedGroup]?.courses.length} Courses
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {groupedCourses[selectedGroup]?.courses.map(course => (
                   <CourseCard key={course.id} course={course} />
                 ))}
@@ -203,19 +238,28 @@ export const LecturerDashboard = () => {
           )}
         </div>
 
-        {/* Right Column - Analytics and Activity */}
-        <div className="space-y-6">
-          <TeachingSchedule courses={filteredCourses} />
-          <PerformanceMetrics 
-            courses={courses} 
-            groupedCourses={groupedCourses}
-            dateRange={dateRange}
-          />
-          <PendingApprovals 
-            courses={filteredCourses}
-            onApprove={refetch}
-          />
-          <RecentActivity courses={filteredCourses} />
+        {/* Intelligence Column: Analytics & Approvals */}
+        <div className="lg:col-span-4 space-y-8">
+          
+
+            <PerformanceMetrics 
+                courses={courses} 
+                groupedCourses={groupedCourses}
+                dateRange={dateRange}
+            />
+            
+            <PendingApprovals 
+                courses={filteredCourses}
+                onApprove={refetch}
+            />
+            
+            <div className="bg-indigo-900 rounded-[2rem] p-6 text-white shadow-2xl shadow-indigo-200">
+                <h3 className="font-bold flex items-center gap-2 mb-4">
+                    <TrendingUp size={18} />
+                    System Activity
+                </h3>
+                <RecentActivity courses={filteredCourses} />
+            </div>
         </div>
       </div>
     </div>
