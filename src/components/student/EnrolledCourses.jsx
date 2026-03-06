@@ -23,6 +23,7 @@ const EnrolledCourses = ({ userId }) => {
 
   const fetchStudentAndCourses = async () => {
     try {
+      // Get student info
       const { data: student, error: studentError } = await supabase
         .from('students')
         .select('id, department, level, full_name, matric_no')
@@ -32,6 +33,7 @@ const EnrolledCourses = ({ userId }) => {
       if (studentError) throw studentError;
       setStudentInfo(student);
 
+      // Get courses for this student's department and level
       const { data: availableCourses, error: coursesError } = await supabase
         .from('courses')
         .select('id, course_code, course_title, department, level, semester')
@@ -43,8 +45,10 @@ const EnrolledCourses = ({ userId }) => {
       setCourses(availableCourses || []);
       
       if (availableCourses && availableCourses.length > 0) {
-        checkActiveSessions(availableCourses);
-        fetchAttendanceStats(student.id, availableCourses);
+        await Promise.all([
+          checkActiveSessions(availableCourses),
+          fetchAttendanceStats(student.id, availableCourses)
+        ]);
       }
     } catch (error) {
       console.error('Error fetching courses:', error);
@@ -65,55 +69,60 @@ const EnrolledCourses = ({ userId }) => {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (data) sessions[course.id] = data;
+      
+      if (data) {
+        sessions[course.id] = data;
+      }
     }
     setActiveSessions(sessions);
   };
 
   const fetchAttendanceStats = async (studentId, coursesList) => {
     const stats = {};
+    
     for (const course of coursesList) {
-      // Get total sessions for this course
-      const { count: totalSessions } = await supabase
-        .from('attendance_sessions')
-        .select('*', { count: 'exact', head: true })
-        .eq('course_id', course.id);
-
-      // Get all session IDs for this course
-      const { data: sessions } = await supabase
+      // Get all sessions for this course
+      const { data: sessions, error: sessionsError } = await supabase
         .from('attendance_sessions')
         .select('id')
         .eq('course_id', course.id);
 
+      if (sessionsError) {
+        console.error('Error fetching sessions:', sessionsError);
+        continue;
+      }
+
+      const totalSessions = sessions?.length || 0;
       const sessionIds = sessions?.map(s => s.id) || [];
 
       // Get student's attendance records for these sessions
       let presentCount = 0;
-      let lateCount = 0;
 
       if (sessionIds.length > 0) {
-        const { data: attendance } = await supabase
+        const { data: attendance, error: attendanceError } = await supabase
           .from('attendance_records')
-          .select('id, scanned_at')
+          .select('id')
           .eq('student_id', studentId)
           .in('session_id', sessionIds);
 
-        presentCount = attendance?.length || 0;
-        // Since we don't have a status column, we can't determine late vs present
-        // All records are considered present
+        if (attendanceError) {
+          console.error('Error fetching attendance:', attendanceError);
+        } else {
+          presentCount = attendance?.length || 0;
+        }
       }
       
-      const absentCount = (totalSessions || 0) - presentCount;
+      const absentCount = totalSessions - presentCount;
+      const attendanceRate = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 0;
       
       stats[course.id] = {
-        totalSessions: totalSessions || 0,
+        totalSessions,
         presentCount,
-        lateCount: 0, // Can't determine late without status column
         absentCount,
-        attendanceRate: totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 0,
-        lastAttended: null // Would need to fetch last attendance
+        attendanceRate
       };
     }
+    
     setAttendanceStats(stats);
   };
 
@@ -137,7 +146,6 @@ const EnrolledCourses = ({ userId }) => {
       // Get student's attendance for each session
       const studentId = studentInfo?.id;
       const sessionsWithAttendance = await Promise.all((sessions || []).map(async (session) => {
-        // Check if student has an attendance record for this session
         const { data: record } = await supabase
           .from('attendance_records')
           .select('id, scanned_at')
@@ -179,12 +187,19 @@ const EnrolledCourses = ({ userId }) => {
   };
 
   const getTimeRemaining = (expiresAt) => {
+    if (!expiresAt) return 'No session';
     const now = new Date();
     const expiry = new Date(expiresAt);
     const diffMs = expiry - now;
     if (diffMs <= 0) return 'Expired';
     const diffMins = Math.floor(diffMs / 60000);
-    return diffMins < 60 ? `${diffMins}m left` : `${Math.floor(diffMins / 60)}h left`;
+    const diffHours = Math.floor(diffMins / 60);
+    const remainingMins = diffMins % 60;
+    
+    if (diffHours > 0) {
+      return `${diffHours}h ${remainingMins}m left`;
+    }
+    return `${diffMins}m left`;
   };
 
   const formatDate = (dateString) => {
@@ -204,10 +219,19 @@ const EnrolledCourses = ({ userId }) => {
   });
 
   if (loading) return (
-    <div className="flex justify-center py-12">
-      <div className="w-6 h-6 border-2 border-gray-100 border-t-gray-900 rounded-full animate-spin"></div>
+    <div className="flex justify-center py-8">
+      <div className="w-6 h-6 border-2 border-gray-200 border-t-indigo-600 rounded-full animate-spin"></div>
     </div>
   );
+
+  if (courses.length === 0) {
+    return (
+      <div className="text-center py-8 text-gray-400">
+        <BookOpen size={32} className="mx-auto mb-2 opacity-30" />
+        <p className="text-sm">No courses found</p>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -247,19 +271,34 @@ const EnrolledCourses = ({ userId }) => {
 
               <div className="flex items-center gap-6">
                 <div className="hidden sm:flex flex-col items-end">
-                  <span className={`text-xs font-black ${stats?.attendanceRate >= 75 ? 'text-gray-900' : 'text-orange-500'}`}>
-                    {stats ? `${stats.attendanceRate}%` : '--'}
-                  </span>
-                  <span className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">
-                    Attendance
-                  </span>
+                  {stats ? (
+                    <>
+                      <span className={`text-xs font-black ${
+                        stats.attendanceRate >= 75 ? 'text-green-600' : 
+                        stats.attendanceRate > 0 ? 'text-orange-500' : 
+                        'text-gray-400'
+                      }`}>
+                        {stats.attendanceRate}%
+                      </span>
+                      <span className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">
+                        {stats.presentCount}/{stats.totalSessions} sessions
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xs font-black text-gray-300">0%</span>
+                      <span className="text-[9px] font-bold text-gray-200 uppercase tracking-widest">
+                        No data
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 <div className="flex items-center">
                   {isLive ? (
                     <div className="flex flex-col items-end bg-emerald-600 px-3 py-1 rounded-xl shadow-lg shadow-emerald-100">
                       <span className="text-[10px] font-black text-white whitespace-nowrap">
-                        {getTimeRemaining(activeSessions[course.id].expires_at)}
+                        {getTimeRemaining(activeSessions[course.id]?.expires_at)}
                       </span>
                     </div>
                   ) : (
@@ -274,10 +313,8 @@ const EnrolledCourses = ({ userId }) => {
 
       {/* Course Details Modal */}
       {showModal && selectedCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowModal(false)} />
-          
-          <div className="relative bg-white rounded-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowModal(false)}>
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 bg-white border-b border-gray-100 p-4 flex justify-between items-center">
               <div>
                 <h3 className="font-bold text-gray-900">{selectedCourse.course_code}</h3>
@@ -305,17 +342,17 @@ const EnrolledCourses = ({ userId }) => {
                     </p>
                     <p className="text-[10px] font-bold text-emerald-400 uppercase">Present</p>
                   </div>
-                  <div className="bg-gray-50 p-3 rounded-xl text-center">
-                    <p className="text-2xl font-black text-gray-400">
+                  <div className="bg-red-50 p-3 rounded-xl text-center">
+                    <p className="text-2xl font-black text-red-600">
                       {attendanceStats[selectedCourse.id]?.absentCount || 0}
                     </p>
-                    <p className="text-[10px] font-bold text-gray-300 uppercase">Absent</p>
+                    <p className="text-[10px] font-bold text-red-400 uppercase">Absent</p>
                   </div>
                   <div className="bg-gray-50 p-3 rounded-xl text-center">
-                    <p className="text-2xl font-black text-gray-400">
+                    <p className="text-2xl font-black text-gray-600">
                       {attendanceStats[selectedCourse.id]?.totalSessions || 0}
                     </p>
-                    <p className="text-[10px] font-bold text-gray-300 uppercase">Total</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase">Total</p>
                   </div>
                 </div>
 
@@ -323,13 +360,9 @@ const EnrolledCourses = ({ userId }) => {
                 <div className="bg-gray-50 p-4 rounded-xl">
                   <div className="flex justify-between items-center mb-2">
                     <span className="text-xs font-bold text-gray-500 uppercase">Overall Attendance</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-2xl font-black text-gray-900">
-                        {attendanceStats[selectedCourse.id]?.attendanceRate || 0}%
-                      </span>
-                      {courseDetails.trend === 'up' && <TrendingUp size={16} className="text-green-500" />}
-                      {courseDetails.trend === 'down' && <TrendingDown size={16} className="text-red-500" />}
-                    </div>
+                    <span className="text-2xl font-black text-gray-900">
+                      {attendanceStats[selectedCourse.id]?.attendanceRate || 0}%
+                    </span>
                   </div>
                   <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
                     <div 
@@ -337,35 +370,13 @@ const EnrolledCourses = ({ userId }) => {
                       style={{ width: `${attendanceStats[selectedCourse.id]?.attendanceRate || 0}%` }}
                     />
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">
-                    {attendanceStats[selectedCourse.id]?.presentCount} of {attendanceStats[selectedCourse.id]?.totalSessions} sessions attended
-                  </p>
-                </div>
-
-                {/* Recent Trend */}
-                <div className="bg-gray-50 p-4 rounded-xl">
-                  <h4 className="text-xs font-bold text-gray-500 uppercase mb-3">Recent Performance</h4>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-600">Last 5 sessions</p>
-                      <p className="text-xl font-black text-gray-900">{courseDetails.recentRate}%</p>
-                    </div>
-                    <div className={`px-3 py-1 rounded-full text-xs font-bold ${
-                      courseDetails.recentRate >= 75 ? 'bg-green-100 text-green-700' :
-                      courseDetails.recentRate >= 50 ? 'bg-yellow-100 text-yellow-700' :
-                      'bg-red-100 text-red-700'
-                    }`}>
-                      {courseDetails.recentRate >= 75 ? 'Good' :
-                       courseDetails.recentRate >= 50 ? 'Average' : 'Needs Improvement'}
-                    </div>
-                  </div>
                 </div>
 
                 {/* Session History */}
                 <div className="bg-gray-50 p-4 rounded-xl">
                   <h4 className="text-xs font-bold text-gray-500 uppercase mb-3">Session History</h4>
                   <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {courseDetails.sessions.map((session, index) => (
+                    {courseDetails.sessions.map((session) => (
                       <div key={session.id} className="flex items-center justify-between p-2 bg-white rounded-lg">
                         <div className="flex items-center gap-2">
                           <div className={`w-2 h-2 rounded-full ${session.isPresent ? 'bg-green-500' : 'bg-red-500'}`} />

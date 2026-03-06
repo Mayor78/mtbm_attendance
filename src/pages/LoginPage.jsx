@@ -48,7 +48,7 @@ const getOrCreateDeviceId = () => {
 
 const LoginPage = () => {
   const navigate = useNavigate();
-  const { userType } = useParams(); // Get user type from URL
+  const { userType } = useParams();
   const { invalidateCache } = useAuth();
   
   const [isLogin, setIsLogin] = useState(true);
@@ -56,14 +56,12 @@ const LoginPage = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  // Redirect if no user type
   useEffect(() => {
     if (!userType || !['student', 'lecturer', 'hoc'].includes(userType)) {
       navigate('/select-type');
     }
   }, [userType, navigate]);
 
-  // Form state
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -93,9 +91,42 @@ const LoginPage = () => {
     });
   };
 
+  const getRoleInfo = () => {
+    switch(userType) {
+      case 'student':
+        return {
+          name: 'Student',
+          color: 'text-blue-600',
+      bg: 'bg-blue-50',
+          icon: '👨‍🎓',
+          description: 'Access your courses and mark attendance'
+        };
+      case 'lecturer':
+        return {
+          name: 'Lecturer',
+          color: 'text-green-600',
+          bg: 'bg-green-50',
+          icon: '👨‍🏫',
+          description: 'Take attendance and manage your courses'
+        };
+      case 'hoc':
+        return {
+          name: 'HOC',
+          color: 'text-purple-600',
+          bg: 'bg-purple-50',
+          icon: '👑',
+          description: 'Department oversight and session management'
+        };
+      default:
+        return {};
+    }
+  };
+
+  const roleInfo = getRoleInfo();
+
   const handleLogin = async () => {
     if (!validateEmail(formData.email)) {
-      setError('Please enter a valid email');
+      setError('Please enter a valid email address');
       return;
     }
 
@@ -117,10 +148,8 @@ const LoginPage = () => {
 
       if (error) throw error;
 
-      // Wait for AuthContext to fetch profile
       await new Promise(resolve => setTimeout(resolve, 1500));
 
-      // Get profile to check role
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('role')
@@ -129,21 +158,18 @@ const LoginPage = () => {
 
       if (profileError) throw profileError;
 
-      // Verify user type matches based on role
       if (userType === 'student' || userType === 'hoc') {
-        // Students and HOCs can both use student login
         if (profile.role !== 'student' && profile.role !== 'hoc') {
           await supabase.auth.signOut();
-          throw new Error('Invalid credentials for student/HOC login');
+          throw new Error('This account is not registered as a student or HOC');
         }
       }
 
       if (userType === 'lecturer' && profile.role !== 'lecturer') {
         await supabase.auth.signOut();
-        throw new Error('Invalid credentials for lecturer login');
+        throw new Error('This account is not registered as a lecturer');
       }
 
-      // Get current device history
       const { data: existingProfile } = await supabase
         .from('profiles')
         .select('device_history')
@@ -155,7 +181,6 @@ const LoginPage = () => {
         deviceHistory.push(deviceId);
       }
 
-      // Update device info
       await supabase
         .from('profiles')
         .update({
@@ -165,16 +190,9 @@ const LoginPage = () => {
         })
         .eq('id', data.user.id);
 
-      // Invalidate cache to refresh context
       invalidateCache();
 
-      // Navigate based on role
-       // Navigate based on role
-      if (profile.role === 'lecturer') {
-        navigate('/dashboard');
-      } else {
-        navigate('/dashboard');
-      }
+      navigate('/dashboard');
 
     } catch (err) {
       setError(getUserFriendlyError(err));
@@ -190,22 +208,22 @@ const LoginPage = () => {
     }
 
     if (!validateEmail(formData.email)) {
-      setError('Please enter a valid email');
+      setError('Please enter a valid email address');
       return;
     }
 
     if (!validateMatricNo(formData.matricNo)) {
-      setError('Please enter a valid matric number (5-20 characters)');
+      setError('Matric number should be 5-20 characters');
       return;
     }
 
     if (!formData.department) {
-      setError('Department is required');
+      setError('Please select your department');
       return;
     }
 
     if (!formData.level) {
-      setError('Level is required');
+      setError('Please select your level');
       return;
     }
 
@@ -218,7 +236,6 @@ const LoginPage = () => {
     setError('');
 
     try {
-      // Check if matric exists
       const { data: existingMatric } = await supabase
         .from('students')
         .select('id')
@@ -226,34 +243,31 @@ const LoginPage = () => {
         .maybeSingle();
 
       if (existingMatric) {
-        throw new Error('Matric number already exists');
+        throw new Error('This matric number is already registered');
       }
 
-      // Create auth user
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.email.trim().toLowerCase(),
         password: formData.password,
         options: {
           data: {
             full_name: formData.fullName.trim(),
-            role: userType === 'hoc' ? 'hoc' : 'student' // Set role based on userType
+            role: userType === 'hoc' ? 'hoc' : 'student'
           }
         }
       });
 
       if (authError) {
         if (authError.message.includes('User already registered')) {
-          throw new Error('Email already registered');
+          throw new Error('This email is already registered. Please login instead.');
         }
         throw authError;
       }
       
       if (!authData.user) throw new Error('Failed to create account');
 
-      // Wait for AuthContext to catch the SIGNED_IN event and create profile
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Insert student record
       const { error: studentError } = await supabase
         .from('students')
         .insert({
@@ -268,15 +282,14 @@ const LoginPage = () => {
 
       if (studentError) {
         if (studentError.code === '23505') {
-          throw new Error('Matric number already exists');
+          throw new Error('This matric number is already registered');
         }
         throw studentError;
       }
 
-      // Invalidate cache so AuthContext fetches fresh data
       invalidateCache();
 
-      setSuccess('Account created successfully! You can now login.');
+      setSuccess('Account created! You can now login.');
       setIsLogin(true);
       clearForm();
 
@@ -295,17 +308,17 @@ const LoginPage = () => {
     }
 
     if (!validateEmail(formData.email)) {
-      setError('Please enter a valid email');
+      setError('Please enter a valid email address');
       return;
     }
 
     if (!validateStaffId(formData.staffId)) {
-      setError('Please enter a valid staff ID');
+      setError('Staff ID should be 3-20 characters');
       return;
     }
 
     if (!formData.department) {
-      setError('Department is required');
+      setError('Please select your department');
       return;
     }
 
@@ -323,7 +336,6 @@ const LoginPage = () => {
     setError('');
 
     try {
-      // Check if staff ID exists
       const { data: existingStaff } = await supabase
         .from('lecturers')
         .select('id')
@@ -331,10 +343,9 @@ const LoginPage = () => {
         .maybeSingle();
 
       if (existingStaff) {
-        throw new Error('Staff ID already exists');
+        throw new Error('This staff ID is already registered');
       }
 
-      // Create auth user
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.email.trim().toLowerCase(),
         password: formData.password,
@@ -348,17 +359,15 @@ const LoginPage = () => {
 
       if (authError) {
         if (authError.message.includes('User already registered')) {
-          throw new Error('Email already registered');
+          throw new Error('This email is already registered. Please login instead.');
         }
         throw authError;
       }
       
       if (!authData.user) throw new Error('Failed to create account');
 
-      // Wait for AuthContext to catch the SIGNED_IN event and create profile
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Insert lecturer record
       const lecturerData = {
         user_id: authData.user.id,
         staff_id: formData.staffId.toUpperCase(),
@@ -380,7 +389,6 @@ const LoginPage = () => {
         throw new Error('Failed to create lecturer record');
       }
 
-      // Insert course assignments
       const courseAssignments = formData.selectedCourses.map(course => ({
         lecturer_id: lecturer.id,
         course_id: course.course_id,
@@ -396,10 +404,9 @@ const LoginPage = () => {
         throw new Error('Failed to assign courses');
       }
 
-      // Invalidate cache so AuthContext fetches fresh data
       invalidateCache();
 
-      setSuccess('Account created successfully! You can now login.');
+      setSuccess('Account created! You can now login.');
       setIsLogin(true);
       clearForm();
 
@@ -418,12 +425,11 @@ const LoginPage = () => {
       if (userType === 'lecturer') {
         handleLecturerSignup();
       } else {
-        handleStudentSignup(); // Handles both student and HOC signup
+        handleStudentSignup();
       }
     }
   };
 
-  // Get title based on userType
   const getTitle = () => {
     switch(userType) {
       case 'student': return 'Student Portal';
@@ -436,33 +442,44 @@ const LoginPage = () => {
   if (!userType) return null;
 
   return (
-    <AuthLayout title={getTitle()}>
-      <div className="mb-4 text-center">
-        <p className="text-sm text-gray-500">
-          Logging in as <span className="font-bold text-indigo-600">{userType.toUpperCase()}</span>
-        </p>
-        <button
-          onClick={() => navigate('/select-type')}
-          className="text-xs text-indigo-600 hover:text-indigo-700 mt-1"
-        >
-          Change role
-        </button>
+    <AuthLayout title={getTitle()} showBackButton={true}>
+      {/* Role Indicator */}
+      <div className={`mb-6 p-4 ${roleInfo.bg} rounded-lg text-center`}>
+        <div className="text-3xl mb-2">{roleInfo.icon}</div>
+        <h3 className={`font-bold ${roleInfo.color}`}>{roleInfo.name} Access</h3>
+        <p className="text-xs text-gray-600 mt-1">{roleInfo.description}</p>
       </div>
 
-      <AuthToggle isLogin={isLogin} onToggle={setIsLogin} />
+      {/* Toggle between Login and Signup */}
+      <div className="mb-6">
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-lg">
+          <button
+            onClick={() => setIsLogin(true)}
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
+              isLogin ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Sign In
+          </button>
+          <button
+            onClick={() => setIsLogin(false)}
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
+              !isLogin ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Create Account
+          </button>
+        </div>
+        <p className="text-xs text-gray-400 text-center mt-2">
+          {isLogin ? 'Already have an account? Sign in' : 'New user? Create your account'}
+        </p>
+      </div>
 
-      <AlertMessage 
-        type="error" 
-        message={error} 
-        onDismiss={() => setError('')} 
-      />
-      
-      <AlertMessage 
-        type="success" 
-        message={success} 
-        onDismiss={() => setSuccess('')} 
-      />
+      {/* Alert Messages */}
+      <AlertMessage type="error" message={error} onDismiss={() => setError('')} />
+      <AlertMessage type="success" message={success} onDismiss={() => setSuccess('')} />
 
+      {/* Forms */}
       {isLogin ? (
         <LoginForm
           formData={formData}
@@ -484,10 +501,20 @@ const LoginPage = () => {
             onChange={handleInputChange}
             onSubmit={handleSubmit}
             loading={loading}
-            isHOC={userType === 'hoc'} // Pass this to show HOC-specific fields if needed
+            isHOC={userType === 'hoc'}
           />
         )
       )}
+
+      {/* Help Text */}
+      <div className="mt-6 text-center border-t border-gray-100 pt-4">
+        <p className="text-xs text-gray-400">
+          Having trouble? Contact the IT Support Desk
+        </p>
+        <p className="text-xs text-gray-300 mt-1">
+          support@maritime.edu • Ext. 1234
+        </p>
+      </div>
     </AuthLayout>
   );
 };

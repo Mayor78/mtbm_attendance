@@ -25,13 +25,7 @@ const QRModal = ({ isOpen, onClose, session, onDownload }) => {
           <p className="text-slate-500 text-sm">{session.course_title}</p>
         </div>
 
-        <div className="bg-white p-6 rounded-[2rem] border-4 border-slate-50 flex justify-center shadow-inner mb-6">
-          <QRCodeCanvas 
-            value={JSON.stringify({ session_id: session.id, token: session.token })} 
-            size={220} 
-            level="H" 
-          />
-        </div>
+      
 
         <div className="bg-indigo-50 rounded-2xl p-4 mb-6">
           <div className="flex flex-col items-center">
