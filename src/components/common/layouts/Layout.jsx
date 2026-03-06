@@ -94,10 +94,10 @@ export const Layout = ({ children }) => {
         {/* Minimal Footer */}
         <footer className="max-w-7xl mx-auto w-full px-8 py-8 border-t border-slate-100">
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4 text-slate-400 text-xs font-bold uppercase tracking-widest">
-            <p>© 2026 UniAttend System</p>
+            <p>© 2026 FcmtAttend System</p>
             <div className="flex gap-6">
               <a href="#" className="hover:text-indigo-600 transition-colors">Privacy</a>
-              <a href="#" className="hover:text-indigo-600 transition-colors ">Built by Mayowa Abaham</a>
+              <a href="#" className="hover:text-indigo-600 transition-colors text-sm ">Built by Mayowa Abaham</a>
             </div>
             <PerformanceMonitor/>
           </div>

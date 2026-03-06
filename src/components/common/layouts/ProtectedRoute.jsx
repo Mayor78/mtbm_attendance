@@ -22,7 +22,7 @@ export const ProtectedRoute = ({ children, allowedRoles = [] }) => {
 
   if (!user) {
     console.log('No user, redirecting to login')
-    return <Navigate to="/login" replace />
+    return <Navigate to="/login/:userType" replace />
   }
 
   // If we have allowedRoles and role exists, check if role is allowed

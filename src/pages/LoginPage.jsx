@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { 
@@ -13,7 +13,6 @@ import {
 // Components
 import AuthLayout from '../components/auth/AuthLayout';
 import AuthToggle from '../components/auth/AuthToggle';
-import UserTypeSelector from '../components/auth/UserTypeSelector';
 import LoginForm from '../components/auth/LoginForm';
 import StudentSignupForm from '../components/auth/StudentSignupForm';
 import LecturerSignupForm from '../components/auth/LecturerSignupForm';
@@ -38,17 +37,31 @@ const generateDeviceId = () => {
   return Math.abs(hash).toString(36) + Date.now().toString(36);
 };
 
+const getOrCreateDeviceId = () => {
+  let deviceId = localStorage.getItem('device_id');
+  if (!deviceId) {
+    deviceId = generateDeviceId();
+    localStorage.setItem('device_id', deviceId);
+  }
+  return deviceId;
+};
 
-
- const LoginPage = () => {
+const LoginPage = () => {
   const navigate = useNavigate();
+  const { userType } = useParams(); // Get user type from URL
   const { invalidateCache } = useAuth();
   
   const [isLogin, setIsLogin] = useState(true);
-  const [userType, setUserType] = useState('student');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  // Redirect if no user type
+  useEffect(() => {
+    if (!userType || !['student', 'lecturer', 'hoc'].includes(userType)) {
+      navigate('/select-type');
+    }
+  }, [userType, navigate]);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -58,7 +71,8 @@ const generateDeviceId = () => {
     matricNo: '',
     staffId: '',
     department: '',
-    level: ''
+    level: '',
+    selectedCourses: []
   });
 
   const handleInputChange = (field, value) => {
@@ -74,18 +88,11 @@ const generateDeviceId = () => {
       matricNo: '',
       staffId: '',
       department: '',
-      level: ''
+      level: '',
+      selectedCourses: []
     });
   };
 
-  const getOrCreateDeviceId = () => {
-  let deviceId = localStorage.getItem('device_id');
-  if (!deviceId) {
-    deviceId = generateDeviceId();
-    localStorage.setItem('device_id', deviceId);
-  }
-  return deviceId;
-};
   const handleLogin = async () => {
     if (!validateEmail(formData.email)) {
       setError('Please enter a valid email');
@@ -123,11 +130,11 @@ const generateDeviceId = () => {
       if (profileError) throw profileError;
 
       // Verify user type matches based on role
-      if (userType === 'student') {
+      if (userType === 'student' || userType === 'hoc') {
         // Students and HOCs can both use student login
         if (profile.role !== 'student' && profile.role !== 'hoc') {
           await supabase.auth.signOut();
-          throw new Error('Invalid credentials for student login');
+          throw new Error('Invalid credentials for student/HOC login');
         }
       }
 
@@ -162,6 +169,7 @@ const generateDeviceId = () => {
       invalidateCache();
 
       // Navigate based on role
+       // Navigate based on role
       if (profile.role === 'lecturer') {
         navigate('/dashboard');
       } else {
@@ -228,7 +236,7 @@ const generateDeviceId = () => {
         options: {
           data: {
             full_name: formData.fullName.trim(),
-            role: 'student'
+            role: userType === 'hoc' ? 'hoc' : 'student' // Set role based on userType
           }
         }
       });
@@ -280,144 +288,168 @@ const generateDeviceId = () => {
     }
   };
 
-const handleLecturerSignup = async () => {
-  if (!formData.fullName.trim()) {
-    setError('Full name is required');
-    return;
-  }
-
-  if (!validateEmail(formData.email)) {
-    setError('Please enter a valid email');
-    return;
-  }
-
-  if (!validateStaffId(formData.staffId)) {
-    setError('Please enter a valid staff ID');
-    return;
-  }
-
-  if (!formData.department) {
-    setError('Department is required');
-    return;
-  }
-
-  if (!formData.selectedCourses || formData.selectedCourses.length === 0) {
-    setError('Please select at least one course you teach');
-    return;
-  }
-
-  if (!validatePassword(formData.password)) {
-    setError('Password must be at least 6 characters');
-    return;
-  }
-
-  setLoading(true);
-  setError('');
-
-  try {
-    // Check if staff ID exists
-    const { data: existingStaff } = await supabase
-      .from('lecturers')
-      .select('id')
-      .eq('staff_id', formData.staffId.toUpperCase())
-      .maybeSingle();
-
-    if (existingStaff) {
-      throw new Error('Staff ID already exists');
+  const handleLecturerSignup = async () => {
+    if (!formData.fullName.trim()) {
+      setError('Full name is required');
+      return;
     }
 
-    // Create auth user
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email: formData.email.trim().toLowerCase(),
-      password: formData.password,
-      options: {
-        data: {
-          full_name: formData.fullName.trim(),
-          role: 'lecturer'
+    if (!validateEmail(formData.email)) {
+      setError('Please enter a valid email');
+      return;
+    }
+
+    if (!validateStaffId(formData.staffId)) {
+      setError('Please enter a valid staff ID');
+      return;
+    }
+
+    if (!formData.department) {
+      setError('Department is required');
+      return;
+    }
+
+    if (!formData.selectedCourses || formData.selectedCourses.length === 0) {
+      setError('Please select at least one course you teach');
+      return;
+    }
+
+    if (!validatePassword(formData.password)) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      // Check if staff ID exists
+      const { data: existingStaff } = await supabase
+        .from('lecturers')
+        .select('id')
+        .eq('staff_id', formData.staffId.toUpperCase())
+        .maybeSingle();
+
+      if (existingStaff) {
+        throw new Error('Staff ID already exists');
+      }
+
+      // Create auth user
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: formData.email.trim().toLowerCase(),
+        password: formData.password,
+        options: {
+          data: {
+            full_name: formData.fullName.trim(),
+            role: 'lecturer'
+          }
         }
+      });
+
+      if (authError) {
+        if (authError.message.includes('User already registered')) {
+          throw new Error('Email already registered');
+        }
+        throw authError;
       }
-    });
+      
+      if (!authData.user) throw new Error('Failed to create account');
 
-    if (authError) {
-      if (authError.message.includes('User already registered')) {
-        throw new Error('Email already registered');
+      // Wait for AuthContext to catch the SIGNED_IN event and create profile
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Insert lecturer record
+      const lecturerData = {
+        user_id: authData.user.id,
+        staff_id: formData.staffId.toUpperCase(),
+        department: formData.department,
+        created_at: new Date().toISOString()
+      };
+
+      if (formData.office) lecturerData.office = formData.office;
+      if (formData.phone) lecturerData.phone = formData.phone;
+
+      const { data: lecturer, error: lecturerError } = await supabase
+        .from('lecturers')
+        .insert(lecturerData)
+        .select()
+        .single();
+
+      if (lecturerError) {
+        console.error('Lecturer insert error:', lecturerError);
+        throw new Error('Failed to create lecturer record');
       }
-      throw authError;
+
+      // Insert course assignments
+      const courseAssignments = formData.selectedCourses.map(course => ({
+        lecturer_id: lecturer.id,
+        course_id: course.course_id,
+        created_at: new Date().toISOString()
+      }));
+
+      const { error: coursesError } = await supabase
+        .from('course_lecturers')
+        .insert(courseAssignments);
+
+      if (coursesError) {
+        console.error('Course assignment error:', coursesError);
+        throw new Error('Failed to assign courses');
+      }
+
+      // Invalidate cache so AuthContext fetches fresh data
+      invalidateCache();
+
+      setSuccess('Account created successfully! You can now login.');
+      setIsLogin(true);
+      clearForm();
+
+    } catch (err) {
+      console.error('Signup error:', err);
+      setError(getUserFriendlyError(err));
+    } finally {
+      setLoading(false);
     }
-    
-    if (!authData.user) throw new Error('Failed to create account');
+  };
 
-    // Wait for AuthContext to catch the SIGNED_IN event and create profile
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // Insert lecturer record
-    const lecturerData = {
-      user_id: authData.user.id,
-      staff_id: formData.staffId.toUpperCase(),
-      department: formData.department,
-      created_at: new Date().toISOString()
-    };
-
-    if (formData.office) lecturerData.office = formData.office;
-    if (formData.phone) lecturerData.phone = formData.phone;
-
-    const { data: lecturer, error: lecturerError } = await supabase
-      .from('lecturers')
-      .insert(lecturerData)
-      .select()
-      .single();
-
-    if (lecturerError) {
-      console.error('Lecturer insert error:', lecturerError);
-      throw new Error('Failed to create lecturer record');
-    }
-
-    // Insert course assignments
-    const courseAssignments = formData.selectedCourses.map(course => ({
-      lecturer_id: lecturer.id,
-      course_id: course.course_id,
-      created_at: new Date().toISOString()
-    }));
-
-    const { error: coursesError } = await supabase
-      .from('course_lecturers')
-      .insert(courseAssignments);
-
-    if (coursesError) {
-      console.error('Course assignment error:', coursesError);
-      throw new Error('Failed to assign courses');
-    }
-
-    // Invalidate cache so AuthContext fetches fresh data
-    invalidateCache();
-
-    setSuccess('Account created successfully! You can now login.');
-    setIsLogin(true);
-    clearForm();
-
-  } catch (err) {
-    console.error('Signup error:', err);
-    setError(getUserFriendlyError(err));
-  } finally {
-    setLoading(false);
-  }
-};
   const handleSubmit = () => {
     if (isLogin) {
       handleLogin();
     } else {
-      if (userType === 'student') {
-        handleStudentSignup();
-      } else {
+      if (userType === 'lecturer') {
         handleLecturerSignup();
+      } else {
+        handleStudentSignup(); // Handles both student and HOC signup
       }
     }
   };
 
+  // Get title based on userType
+  const getTitle = () => {
+    switch(userType) {
+      case 'student': return 'Student Portal';
+      case 'lecturer': return 'Lecturer Portal';
+      case 'hoc': return 'HOC Portal';
+      default: return 'Authentication';
+    }
+  };
+
+  if (!userType) return null;
+
   return (
-    <AuthLayout>
+    <AuthLayout title={getTitle()}>
+      <div className="mb-4 text-center">
+        <p className="text-sm text-gray-500">
+          Logging in as <span className="font-bold text-indigo-600">{userType.toUpperCase()}</span>
+        </p>
+        <button
+          onClick={() => navigate('/select-type')}
+          className="text-xs text-indigo-600 hover:text-indigo-700 mt-1"
+        >
+          Change role
+        </button>
+      </div>
+
       <AuthToggle isLogin={isLogin} onToggle={setIsLogin} />
-      <UserTypeSelector userType={userType} onSelect={setUserType} isLogin={isLogin} />
 
       <AlertMessage 
         type="error" 
@@ -439,19 +471,20 @@ const handleLecturerSignup = async () => {
           loading={loading}
         />
       ) : (
-        userType === 'student' ? (
-          <StudentSignupForm
+        userType === 'lecturer' ? (
+          <LecturerSignupForm
             formData={formData}
             onChange={handleInputChange}
             onSubmit={handleSubmit}
             loading={loading}
           />
         ) : (
-          <LecturerSignupForm
+          <StudentSignupForm
             formData={formData}
             onChange={handleInputChange}
             onSubmit={handleSubmit}
             loading={loading}
+            isHOC={userType === 'hoc'} // Pass this to show HOC-specific fields if needed
           />
         )
       )}

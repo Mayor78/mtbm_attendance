@@ -17,6 +17,7 @@ import { CourseAttendance } from './pages/CourseAttendance'
 import StudentProfile from './pages/StudentProfile'
 import LoginPage from './pages/LoginPage'
 import { LecturerDashboard } from './pages/LecturerDashboard'
+import UserTypePage from './pages/UserTypePage'
 
 
 const DashboardRouter = () => {
@@ -28,7 +29,7 @@ const DashboardRouter = () => {
    if (role === 'lecturer') return <LecturerDashboard/>
   if (role === 'admin') return <div>Admin Dashboard (Coming Soon)</div>
   
-  return <Navigate to="/login" />
+  return <Navigate to="/login/:userType" />
 }
 
 function App() {
@@ -36,7 +37,8 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
-          <Route path="/login" element={<LoginPage />} />
+           <Route path="/select-type" element={<UserTypePage/>} />
+        <Route path="/login/:userType" element={<LoginPage />} />
           
           <Route path="/" element={
             <ProtectedRoute>
