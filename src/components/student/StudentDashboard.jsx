@@ -58,7 +58,7 @@ const StudentDashboard = () => {
   }
 
   return (
-    <div className="max-w-5xl mx-auto pb-24 space-y-8 px-4 sm:px-0">
+    <div className="max-w-5xl mx-auto pb-24 space-y-8 px-1 sm:px-0">
       
       {/* Welcome Header */}
       <header className="relative overflow-hidden rounded-3xl bg-indigo-600 p-6 sm:p-8 text-white shadow-xl shadow-indigo-100">
@@ -77,19 +77,13 @@ const StudentDashboard = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowQRScanner(true)}
-              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-white text-indigo-600 rounded-2xl font-bold shadow-lg hover:bg-indigo-50 transition-all active:scale-95"
-            >
-              <QrCode size={20} />
-              Scan QR
-            </button>
+         
             <button
               onClick={() => setShowCodeInput(true)}
               className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-3 bg-indigo-500 text-white rounded-2xl font-bold border border-indigo-400 hover:bg-indigo-400 transition-all active:scale-95"
             >
-              <Keyboard size={20} />
-              Code
+            
+            <span className='text-sm'> Mark attendance</span>
             </button>
           </div>
         </div>

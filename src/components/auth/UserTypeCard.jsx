@@ -25,12 +25,12 @@ const UserTypeCard = ({ type, title, onSelect }) => {
       className="group flex flex-col items-center justify-center w-full transition-all duration-300 active:scale-90"
     >
       {/* Avatar Circle with Image */}
-      <div className={`relative w-24 h-24 sm:w-40 sm:h-40 rounded-full mb-3 p-1 transition-all duration-500 ring-0 group-hover:ring-4 ${colors.ring}`}>
+      <div className={`relative w-30 h-30 sm:w-40 sm:h-40 rounded-full mb-3 p-1 transition-all duration-500 ring-0 group-hover:ring-4 ${colors.ring}`}>
         <div className="w-full h-full rounded-full overflow-hidden bg-gray-100 border-2 border-white shadow-sm">
           <img 
             src={thumbnail} 
             alt={title}
-            className="w-full h-full object-cover transition-all duration-500 grayscale group-hover:grayscale-0 group-hover:scale-110"
+            className="w-full h-full object-cover transition-all duration-500 md:grayscale group-hover:grayscale-0 group-hover:scale-110"
           />
         </div>
         

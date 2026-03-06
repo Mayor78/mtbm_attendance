@@ -21,7 +21,7 @@ const UserTypePage = () => {
             Identify Yourself
           </h2>
           <p className="text-sm font-bold text-gray-400 uppercase tracking-[0.15em]">
-            Select your portal to continue
+            Select your role to continue
           </p>
         </div>
 
