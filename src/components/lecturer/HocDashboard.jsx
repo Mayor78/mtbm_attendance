@@ -229,9 +229,9 @@ const startSession = async () => {
     const token = crypto.randomUUID();
     const numeric_code = Math.floor(100000 + Math.random() * 900000).toString();
     
-    // Set expiry to 10 minutes from now
     // Set expiry to 1 hour from now
-const expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+    const ONE_HOUR = 60 * 60 * 1000; // 60 minutes * 60 seconds * 1000 milliseconds
+    const expires_at = new Date(Date.now() + ONE_HOUR).toISOString();
     
     const { data, error } = await supabase
       .from('attendance_sessions')
@@ -256,7 +256,8 @@ const expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hou
     if (data) {
       const course = courses.find(c => c.id === selectedCourse);
       
-      setSuccess(`Session started for 10 minutes at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
+      // Update success message to 1 hour
+      setSuccess(`Session started for 1 hour at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
       
       setNewSession({ 
         ...data, 
@@ -274,10 +275,10 @@ const expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hou
       setShowSessionModal(false);
       refetch();
 
-      // Auto-end session after 10 minutes (local timeout)
+      // Auto-end session after 1 hour
       setTimeout(() => {
         autoEndSession(data.id);
-      }, 10 * 60 * 1000); // 10 minutes in milliseconds
+      }, ONE_HOUR);
     }
   } catch (error) { 
     console.error('Start session error:', error);
@@ -286,10 +287,7 @@ const expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hou
     setIsCreatingSession(false);
   }
 };
-
-
-
-  const autoEndSession = async (sessionId) => {
+const autoEndSession = async (sessionId) => {
   try {
     console.log('⏰ Auto-ending session:', sessionId);
     
@@ -312,8 +310,8 @@ const expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hou
       checkActiveSessions();
       refetch();
 
-      // Show notification
-      setSuccess('Session ended automatically (10 minutes elapsed)');
+      // Update message to 1 hour
+      setSuccess('Session ended automatically (1 hour elapsed)');
     }
   } catch (error) {
     console.error('Error auto-ending session:', error);
