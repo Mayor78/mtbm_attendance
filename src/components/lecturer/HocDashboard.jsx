@@ -230,7 +230,8 @@ const startSession = async () => {
     const numeric_code = Math.floor(100000 + Math.random() * 900000).toString();
     
     // Set expiry to 10 minutes from now
-    const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
+    // Set expiry to 1 hour from now
+const expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
     
     const { data, error } = await supabase
       .from('attendance_sessions')
