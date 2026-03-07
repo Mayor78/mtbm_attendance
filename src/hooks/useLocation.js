@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, queryKeys } from '../lib/api';
 
-// Cache location in memory
+// Cache location in memory (can be replaced with TanStack Query's cache)
 const locationCache = {
   data: null,
   timestamp: null,
@@ -9,31 +11,24 @@ const locationCache = {
 
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-export const useLocation = () => {
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [cachedLocation, setCachedLocation] = useState(null);
-  const [locationStatus, setLocationStatus] = useState('idle'); // idle, loading, success, error
-  const isMounted = useRef(true);
-
-  // Get address from coordinates using geocoding service
-  const getAddressForLocation = useCallback(async (location) => {
+// API functions for location
+const locationApi = {
+  getAddressFromCoords: async ({ lat, lng }) => {
     try {
       const response = await fetch(
-        `https://tywhkdmlhjiluslmxdjt.supabase.co/functions/v1/geocode?lat=${location.lat}&lng=${location.lng}`
+        `https://tywhkdmlhjiluslmxdjt.supabase.co/functions/v1/geocode?lat=${lat}&lng=${lng}`
       );
       if (response.ok) {
         const data = await response.json();
-        return data.address || `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`;
+        return data.address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
       }
     } catch (err) {
       console.warn('Geocoding failed:', err);
     }
-    return `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`;
-  }, []);
+    return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  },
 
-  // Get location from IP address as fallback
-  const getIpLocation = useCallback(async () => {
+  getIpLocation: async () => {
     try {
       const response = await fetch('https://ipapi.co/json/');
       const data = await response.json();
@@ -55,7 +50,7 @@ export const useLocation = () => {
       };
 
       try {
-        const address = await getAddressForLocation(location);
+        const address = await locationApi.getAddressFromCoords(location);
         location.address = address;
       } catch (e) {
         // Ignore address errors for IP
@@ -66,22 +61,151 @@ export const useLocation = () => {
       console.error('IP location error:', error);
       throw new Error('Could not get location from IP');
     }
-  }, [getAddressForLocation]);
+  },
 
-  // Preload location on hook initialization
+  getGpsLocation: () => {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('Geolocation not supported'));
+        return;
+      }
+
+      const options = {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0
+      };
+
+      let attempts = 0;
+      const maxAttempts = 3;
+      let bestGpsLocation = null;
+      
+      const tryGetPosition = () => {
+        navigator.geolocation.getCurrentPosition(
+          async (position) => {
+            const location = {
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+              accuracy: position.coords.accuracy,
+              source: 'gps',
+              method: 'gps',
+              timestamp: new Date().toISOString()
+            };
+
+            attempts++;
+
+            if (!bestGpsLocation || location.accuracy < bestGpsLocation.accuracy) {
+              bestGpsLocation = location;
+            }
+
+            if (location.accuracy < 50) {
+              console.log(`✅ Good GPS accuracy: ${location.accuracy}m`);
+              
+              try {
+                const address = await locationApi.getAddressFromCoords(location);
+                location.address = address;
+              } catch (e) {}
+
+              resolve(location);
+              return;
+            }
+
+            if (attempts >= maxAttempts) {
+              if (bestGpsLocation) {
+                console.log(`📊 Using best GPS reading: ${bestGpsLocation.accuracy}m`);
+                
+                try {
+                  const address = await locationApi.getAddressFromCoords(bestGpsLocation);
+                  bestGpsLocation.address = address;
+                } catch (e) {}
+                
+                if (bestGpsLocation.accuracy > 100) {
+                  bestGpsLocation.warning = 'GPS accuracy is low. Please ensure you have a clear view of the sky.';
+                }
+                
+                resolve(bestGpsLocation);
+              } else {
+                reject(new Error('No valid GPS readings'));
+              }
+              return;
+            }
+
+            setTimeout(tryGetPosition, 1000);
+          },
+          (err) => {
+            console.warn('GPS attempt failed:', err);
+            attempts++;
+            
+            if (attempts < maxAttempts) {
+              setTimeout(tryGetPosition, 1000);
+            } else {
+              reject(err);
+            }
+          },
+          options
+        );
+      };
+
+      tryGetPosition();
+    });
+  },
+
+  getLocation: async () => {
+    try {
+      // Try GPS first
+      return await locationApi.getGpsLocation();
+    } catch (gpsError) {
+      console.warn('GPS failed, falling back to IP:', gpsError);
+      // Fall back to IP location
+      const ipLoc = await locationApi.getIpLocation();
+      return {
+        ...ipLoc,
+        warning: 'GPS unavailable - using IP location (may be inaccurate)'
+      };
+    }
+  }
+};
+
+export const useLocation = () => {
+  const queryClient = useQueryClient();
+  const [locationStatus, setLocationStatus] = useState('idle'); // idle, loading, success, error
+  const isMounted = useRef(true);
+
+  // Use TanStack Query for location data
+  const locationQuery = useQuery({
+    queryKey: ['currentLocation'],
+    queryFn: locationApi.getLocation,
+    staleTime: CACHE_DURATION,
+    gcTime: CACHE_DURATION * 2,
+    retry: 2,
+    retryDelay: 1000,
+    enabled: false, // Don't fetch automatically
+  });
+
+  // Get address for specific coordinates
+  const useAddress = (lat, lng) => {
+    return useQuery({
+      queryKey: queryKeys.geocode(lat, lng),
+      queryFn: () => locationApi.getAddressFromCoords({ lat, lng }),
+      enabled: !!lat && !!lng,
+      staleTime: Infinity,
+      gcTime: 24 * 60 * 60 * 1000,
+    });
+  };
+
   useEffect(() => {
     isMounted.current = true;
     
-    // Pre-fetch location when hook is first used
+    // Preload location
     preloadLocation();
     
     // Refresh location periodically
     const interval = setInterval(() => {
-      if (isMounted.current) {
-        // Only refresh if cache is about to expire
-        if (locationCache.timestamp && (Date.now() - locationCache.timestamp) > (CACHE_DURATION - 30000)) {
+      if (isMounted.current && locationQuery.data) {
+        const age = Date.now() - new Date(locationQuery.data.timestamp).getTime();
+        if (age > CACHE_DURATION - 30000) {
           console.log('📍 Refreshing location cache');
-          preloadLocation();
+          refreshLocation();
         }
       }
     }, 30000);
@@ -92,249 +216,63 @@ export const useLocation = () => {
     };
   }, []);
 
-  // Main function to get current location
-  const getCurrentLocation = useCallback(() => {
-    // Check cache first
-    if (locationCache.data && locationCache.timestamp) {
-      const age = Date.now() - locationCache.timestamp;
-      if (age < CACHE_DURATION) {
-        console.log(`📍 Using cached location (${Math.round(age / 1000)}s old)`);
-        return Promise.resolve({
-          ...locationCache.data,
-          fromCache: true,
-          cacheAge: age
-        });
-      }
+  // Update status based on query state
+  useEffect(() => {
+    if (locationQuery.isLoading) {
+      setLocationStatus('loading');
+    } else if (locationQuery.isError) {
+      setLocationStatus('error');
+    } else if (locationQuery.isSuccess) {
+      setLocationStatus('success');
     }
+  }, [locationQuery.isLoading, locationQuery.isError, locationQuery.isSuccess]);
 
-    // If already fetching, return existing promise
-    if (locationCache.promise) {
-      console.log('📍 Location fetch already in progress');
-      return locationCache.promise;
-    }
+  const getCurrentLocation = useCallback(async () => {
+    return await locationQuery.refetch();
+  }, [locationQuery]);
 
-    setIsLoading(true);
-    setError(null);
-    setLocationStatus('loading');
-    
-    const fetchLocation = () => {
-      return new Promise((resolve, reject) => {
-        if (!navigator.geolocation) {
-          console.warn('No GPS available, using IP location (may be inaccurate)');
-          getIpLocation()
-            .then(ipLoc => {
-              const result = {
-                ...ipLoc,
-                warning: 'Using IP location - accuracy may be low'
-              };
-              
-              // Cache the result
-              locationCache.data = result;
-              locationCache.timestamp = Date.now();
-              locationCache.promise = null;
-              
-              if (isMounted.current) {
-                setCachedLocation(result);
-                setLocationStatus('success');
-                setIsLoading(false);
-              }
-              resolve(result);
-            })
-            .catch(reject);
-          return;
-        }
-
-        const options = {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 0
-        };
-
-        let attempts = 0;
-        const maxAttempts = 3;
-        let bestGpsLocation = null;
-        
-        const tryGetPosition = () => {
-          navigator.geolocation.getCurrentPosition(
-            async (position) => {
-              const location = {
-                lat: position.coords.latitude,
-                lng: position.coords.longitude,
-                accuracy: position.coords.accuracy,
-                source: 'gps',
-                method: 'gps',
-                timestamp: new Date().toISOString()
-              };
-
-              attempts++;
-
-              if (!bestGpsLocation || location.accuracy < bestGpsLocation.accuracy) {
-                bestGpsLocation = location;
-              }
-
-              if (location.accuracy < 50) {
-                console.log(`✅ Good GPS accuracy: ${location.accuracy}m`);
-                
-                try {
-                  const address = await getAddressForLocation(location);
-                  location.address = address;
-                } catch (e) {}
-
-                // Cache the result
-                locationCache.data = location;
-                locationCache.timestamp = Date.now();
-                locationCache.promise = null;
-
-                if (isMounted.current) {
-                  setCachedLocation(location);
-                  setLocationStatus('success');
-                  setIsLoading(false);
-                }
-                resolve(location);
-                return;
-              }
-
-              if (attempts >= maxAttempts) {
-                if (bestGpsLocation) {
-                  console.log(`📊 Using best GPS reading: ${bestGpsLocation.accuracy}m`);
-                  
-                  try {
-                    const address = await getAddressForLocation(bestGpsLocation);
-                    bestGpsLocation.address = address;
-                  } catch (e) {}
-                  
-                  if (bestGpsLocation.accuracy > 100) {
-                    bestGpsLocation.warning = 'GPS accuracy is low. Please ensure you have a clear view of the sky.';
-                  }
-                  
-                  // Cache the result
-                  locationCache.data = bestGpsLocation;
-                  locationCache.timestamp = Date.now();
-                  locationCache.promise = null;
-
-                  if (isMounted.current) {
-                    setCachedLocation(bestGpsLocation);
-                    setLocationStatus('success');
-                    setIsLoading(false);
-                  }
-                  resolve(bestGpsLocation);
-                } else {
-                  console.warn('⚠️ No valid GPS readings, using IP fallback');
-                  getIpLocation()
-                    .then(ipLoc => {
-                      const result = {
-                        ...ipLoc,
-                        warning: 'Using IP location - this may be inaccurate. Please enable GPS for better accuracy.'
-                      };
-                      
-                      locationCache.data = result;
-                      locationCache.timestamp = Date.now();
-                      locationCache.promise = null;
-
-                      if (isMounted.current) {
-                        setCachedLocation(result);
-                        setLocationStatus('success');
-                        setIsLoading(false);
-                      }
-                      resolve(result);
-                    })
-                    .catch(reject);
-                }
-                return;
-              }
-
-              setTimeout(tryGetPosition, 1000);
-            },
-            (err) => {
-              console.warn('GPS attempt failed:', err);
-              attempts++;
-              
-              if (attempts < maxAttempts) {
-                setTimeout(tryGetPosition, 1000);
-              } else {
-                console.warn('⚠️ All GPS attempts failed, using IP fallback');
-                getIpLocation()
-                  .then(ipLoc => {
-                    const result = {
-                      ...ipLoc,
-                      warning: 'GPS unavailable - using IP location (may be inaccurate)'
-                    };
-                    
-                    locationCache.data = result;
-                    locationCache.timestamp = Date.now();
-                    locationCache.promise = null;
-
-                    if (isMounted.current) {
-                      setCachedLocation(result);
-                      setLocationStatus('success');
-                      setIsLoading(false);
-                    }
-                    resolve(result);
-                  })
-                  .catch(reject);
-              }
-            },
-            options
-          );
-        };
-
-        tryGetPosition();
-      });
-    };
-
-    locationCache.promise = fetchLocation();
-    return locationCache.promise;
-  }, [getIpLocation, getAddressForLocation]);
-
-  // Preload location function
   const preloadLocation = useCallback(() => {
-    // Only preload if not already cached or cache expired
-    if (!locationCache.data || !locationCache.timestamp || 
-        (Date.now() - locationCache.timestamp) > CACHE_DURATION) {
-      console.log('📍 Preloading location');
-      getCurrentLocation().catch(() => {});
+    if (!locationQuery.data) {
+      locationQuery.refetch();
     }
-  }, [getCurrentLocation]);
+  }, [locationQuery]);
 
-  // Get cached location synchronously
-  const getCachedLocation = useCallback(() => {
-    return cachedLocation || locationCache.data;
-  }, [cachedLocation]);
-
-  // Force refresh location
   const refreshLocation = useCallback(() => {
-    // Force refresh by invalidating cache
-    locationCache.timestamp = 0;
-    locationCache.promise = null;
-    return getCurrentLocation();
-  }, [getCurrentLocation]);
+    // Invalidate the query to force a refetch
+    queryClient.invalidateQueries({ queryKey: ['currentLocation'] });
+    return locationQuery.refetch();
+  }, [queryClient, locationQuery]);
 
-  // Get location status info
-  const getLocationStatus = useCallback(() => {
-    if (locationCache.data && locationCache.timestamp) {
-      const age = Date.now() - locationCache.timestamp;
-      return {
-        available: true,
-        cached: age < CACHE_DURATION,
-        age,
-        method: locationCache.data.method,
-        accuracy: locationCache.data.accuracy
-      };
-    }
-    return { available: false };
+  const getAddressForLocation = useCallback(async (location) => {
+    return await locationApi.getAddressFromCoords(location);
+  }, []);
+
+  const getIpLocation = useCallback(async () => {
+    return await locationApi.getIpLocation();
   }, []);
 
   return {
+    // Main functions
     getCurrentLocation,
     getAddressForLocation,
-    isLoading,
-    error,
-    cachedLocation: getCachedLocation(),
+    getIpLocation,
+    
+    // Query state
+    isLoading: locationQuery.isLoading,
+    isError: locationQuery.isError,
+    error: locationQuery.error,
+    data: locationQuery.data,
+    
+    // Enhanced state
+    cachedLocation: locationQuery.data,
     locationStatus,
+    
+    // Actions
     preloadLocation,
     refreshLocation,
-    getLocationStatus,
-    isCached: !!(locationCache.data && locationCache.timestamp && 
-                 (Date.now() - locationCache.timestamp) < CACHE_DURATION)
+    
+    // Helpers
+    isCached: !!locationQuery.data,
+    useAddress, // Hook for getting address for specific coordinates
   };
 };

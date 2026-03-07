@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
-import { useHOCData } from '../../hooks/useHOCData'; // Import new hook
+import { useHOCData } from '../../hooks/useHOCData';
 import { useLocation } from '../../hooks/useLocation';
+import { supabase } from '../../lib/supabase';
+import { api } from '../../lib/api';
 
 // Import components
 import HOCHeader from '../hoc/HOCHeader';
@@ -15,7 +16,7 @@ import SessionModal from '../hoc/SessionModal';
 import QRModal from '../hoc/QRModal';
 import ManualAttendanceModal from '../hoc/ManualAttendanceModal';
 import AttendanceSkeleton from '../common/AttendanceSkeleton';
-import HOCStats from '../hoc/HOCStats'; // New component for stats
+import HOCStats from '../hoc/HOCStats';
 
 export const HocDashboard = () => {
   const { user, profile } = useAuth();
@@ -25,8 +26,9 @@ export const HocDashboard = () => {
     loading, 
     error: hookError, 
     stats,
+    liveActivity,
     refetch 
-  } = useHOCData(user?.id); // Use the new hook
+  } = useHOCData(user?.id);
   
   const { getCurrentLocation } = useLocation();
   
@@ -48,7 +50,7 @@ export const HocDashboard = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const coursesPerPage = 6;
 
-  // Department and Course Options (for creating new courses)
+  // Department and Course Options
   const departments = [
     'Maritime Transport & Business Management (MTBM)',
     'Nautical Science',
@@ -75,49 +77,31 @@ export const HocDashboard = () => {
   const semesters = ['First Semester', 'Second Semester', 'Summer Semester'];
 
   // Check active sessions
-  useEffect(() => {
-    if (courses.length > 0) checkActiveSessions();
+  const checkActiveSessions = async () => {
+    if (!courses.length) return;
+    
+    const courseIds = courses.map(c => c.id);
+    const sessions = await api.fetchActiveSessionsWithRecords(courseIds);
+    setActiveSessions(sessions);
+  };
+
+  // Use effect to check active sessions when courses change
+  React.useEffect(() => {
+    if (courses.length > 0) {
+      checkActiveSessions();
+    }
   }, [courses]);
 
- const checkActiveSessions = async () => {
-  const sessions = {};
-  
-  for (const course of courses) {
-    console.log('Checking active sessions for course:', course.course_code);
+  // Auto-refresh active sessions every 30 seconds
+  React.useEffect(() => {
+    if (!courses.length) return;
     
-    const { data, error } = await supabase
-      .from('attendance_sessions')
-      .select(`
-        *,
-        attendance_records (
-          id,
-          student_id,
-          scanned_at
-        )
-      `)
-      .eq('course_id', course.id)
-      .eq('is_active', true)
-      .gt('expires_at', new Date().toISOString())
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-      
-    if (error) {
-      console.error('Error fetching session:', error);
-    }
+    const interval = setInterval(() => {
+      checkActiveSessions();
+    }, 30000);
     
-    if (data) {
-      console.log(`✅ Found active session for ${course.course_code}:`, {
-        sessionId: data.id,
-        recordsCount: data.attendance_records?.length,
-        records: data.attendance_records
-      });
-      sessions[course.id] = data;
-    }
-  }
-  
-  setActiveSessions(sessions);
-};
+    return () => clearInterval(interval);
+  }, [courses]);
 
   const handleCourseSubmit = async (formData) => {
     setError(''); 
@@ -125,55 +109,36 @@ export const HocDashboard = () => {
     
     try {
       if (editingCourse) {
-        const { error } = await supabase
-          .from('courses')
-          .update({
-            course_code: formData.course_code,
-            course_title: formData.course_title,
-            department: formData.department,
-            semester: formData.semester
-          })
-          .eq('id', editingCourse.id);
-        
-        if (error) throw error;
+        await api.updateCourse(editingCourse.id, {
+          course_code: formData.course_code,
+          course_title: formData.course_title,
+          department: formData.department,
+          semester: formData.semester
+        });
         setSuccess('Course updated successfully!');
       } else {
         // Create new course with HOC's level
-        const { data, error } = await supabase
-          .from('courses')
-          .insert({
-            course_code: formData.course_code,
-            course_title: formData.course_title,
-            department: formData.department,
-            semester: formData.semester,
-            level: hocInfo?.level // Use HOC's level from hook
-          })
-          .select()
-          .single();
+        const newCourse = await api.createCourse({
+          course_code: formData.course_code,
+          course_title: formData.course_title,
+          department: formData.department,
+          semester: formData.semester,
+          level: hocInfo?.level
+        });
         
-        if (error) throw error;
-        
-        const { data: studentData, error: studentIdError } = await supabase
+        const { data: studentData } = await supabase
           .from('students')
           .select('id')
           .eq('user_id', user.id)
           .single();
         
-        if (studentIdError) throw studentIdError;
-        
         if (studentData) {
-          const { error: repError } = await supabase
-            .from('course_representatives')
-            .insert({ 
-              student_id: studentData.id, 
-              course_id: data.id 
-            });
-          
-          if (repError) {
+          try {
+            await api.addCourseRepresentative(studentData.id, newCourse.id);
+            setSuccess('Course created successfully!');
+          } catch (repError) {
             console.error('Rep insert error:', repError);
             setSuccess('Course created! But you may need to manually assign yourself as HOC.');
-          } else {
-            setSuccess('Course created successfully!');
           }
         }
       }
@@ -190,7 +155,7 @@ export const HocDashboard = () => {
   const deleteCourse = async (id) => {
     if (!window.confirm('Are you sure you want to delete this course?')) return;
     try {
-      await supabase.from('courses').delete().eq('id', id);
+      await api.deleteCourse(id);
       setSuccess('Course deleted successfully');
       refetch();
     } catch (e) { 
@@ -198,44 +163,38 @@ export const HocDashboard = () => {
     }
   };
 
-const startSession = async () => {
-  if (!selectedCourse) return;
-  
-  try {
-    setError('');
-    setIsCreatingSession(true);
-
-    const hocLocation = await getCurrentLocation();
+  const startSession = async () => {
+    if (!selectedCourse) return;
     
-    if (!hocLocation) {
-      throw new Error('Cannot create session without location. Please enable GPS to set the attendance boundary.');
-    }
+    try {
+      setError('');
+      setIsCreatingSession(true);
 
-    // Verify course matches HOC's department and level
-    const { data: course } = await supabase
-      .from('courses')
-      .select('department, level')
-      .eq('id', selectedCourse)
-      .single();
+      const hocLocation = await getCurrentLocation();
+      
+      if (!hocLocation) {
+        throw new Error('Cannot create session without location. Please enable GPS to set the attendance boundary.');
+      }
 
-    if (course.department !== hocInfo?.department) {
-      throw new Error(`You can only create sessions for ${hocInfo?.department} department courses.`);
-    }
+      // Verify course matches HOC's department and level
+      const course = courses.find(c => c.id === selectedCourse);
+      
+      if (course.department !== hocInfo?.department) {
+        throw new Error(`You can only create sessions for ${hocInfo?.department} department courses.`);
+      }
 
-    if (course.level !== hocInfo?.level) {
-      throw new Error(`You can only create sessions for ${hocInfo?.level} level courses.`);
-    }
-    
-    const token = crypto.randomUUID();
-    const numeric_code = Math.floor(100000 + Math.random() * 900000).toString();
-    
-    // Set expiry to 1 hour from now
-    const ONE_HOUR = 60 * 60 * 1000; // 60 minutes * 60 seconds * 1000 milliseconds
-    const expires_at = new Date(Date.now() + ONE_HOUR).toISOString();
-    
-    const { data, error } = await supabase
-      .from('attendance_sessions')
-      .insert({
+      if (course.level !== hocInfo?.level) {
+        throw new Error(`You can only create sessions for ${hocInfo?.level} level courses.`);
+      }
+      
+      const token = crypto.randomUUID();
+      const numeric_code = Math.floor(100000 + Math.random() * 900000).toString();
+      
+      // Set expiry to 1 hour from now
+      const ONE_HOUR = 60 * 60 * 1000;
+      const expires_at = new Date(Date.now() + ONE_HOUR).toISOString();
+      
+      const sessionData = {
         course_id: selectedCourse,
         created_by: user.id,
         token: token,
@@ -247,91 +206,81 @@ const startSession = async () => {
         allowed_location_lng: hocLocation.lng,
         allowed_radius_meters: 500,
         strict_location: true
-      })
-      .select()
-      .single();
+      };
+      
+      const data = await api.createSession(sessionData);
 
-    if (error) throw error;
+      if (data) {
+        const course = courses.find(c => c.id === selectedCourse);
+        
+        setSuccess(`Session started for 1 hour at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
+        
+        setNewSession({ 
+          ...data, 
+          course_code: course?.course_code, 
+          course_title: course?.course_title,
+          location: hocLocation
+        });
+        
+        // Update active sessions
+        setActiveSessions(prev => ({
+          ...prev,
+          [selectedCourse]: data
+        }));
+        
+        setShowQRModal(true);
+        setShowSessionModal(false);
+        refetch();
 
-    if (data) {
-      const course = courses.find(c => c.id === selectedCourse);
-      
-      // Update success message to 1 hour
-      setSuccess(`Session started for 1 hour at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
-      
-      setNewSession({ 
-        ...data, 
-        course_code: course?.course_code, 
-        course_title: course?.course_title,
-        location: hocLocation
-      });
-      
-      setActiveSessions(prev => ({
-        ...prev,
-        [selectedCourse]: data
-      }));
-      
-      setShowQRModal(true);
-      setShowSessionModal(false);
-      refetch();
-
-      // Auto-end session after 1 hour
-      setTimeout(() => {
-        autoEndSession(data.id);
-      }, ONE_HOUR);
+        // Auto-end session after 1 hour
+        setTimeout(() => {
+          autoEndSession(data.id);
+        }, ONE_HOUR);
+      }
+    } catch (error) { 
+      console.error('Start session error:', error);
+      setError(error.message || 'Failed to start session.'); 
+    } finally {
+      setIsCreatingSession(false);
     }
-  } catch (error) { 
-    console.error('Start session error:', error);
-    setError(error.message || 'Failed to start session.'); 
-  } finally {
-    setIsCreatingSession(false);
-  }
-};
-const autoEndSession = async (sessionId) => {
-  try {
-    console.log('⏰ Auto-ending session:', sessionId);
-    
-    // Check if session is still active before ending
-    const { data: session } = await supabase
-      .from('attendance_sessions')
-      .select('is_active')
-      .eq('id', sessionId)
-      .single();
+  };
 
-    if (session && session.is_active) {
-      await supabase
+  const autoEndSession = async (sessionId) => {
+    try {
+      console.log('⏰ Auto-ending session:', sessionId);
+      
+      // Check if session is still active before ending
+      const { data: session } = await supabase
         .from('attendance_sessions')
-        .update({ is_active: false })
-        .eq('id', sessionId);
+        .select('is_active')
+        .eq('id', sessionId)
+        .single();
 
-      console.log('✅ Session auto-ended successfully');
-      
-      // Refresh active sessions
-      checkActiveSessions();
-      refetch();
-
-      // Update message to 1 hour
-      setSuccess('Session ended automatically (1 hour elapsed)');
+      if (session && session.is_active) {
+        await api.endSession(sessionId);
+        console.log('✅ Session auto-ended successfully');
+        
+        // Refresh active sessions
+        checkActiveSessions();
+        refetch();
+        setSuccess('Session ended automatically (1 hour elapsed)');
+      }
+    } catch (error) {
+      console.error('Error auto-ending session:', error);
     }
-  } catch (error) {
-    console.error('Error auto-ending session:', error);
-  }
-};
+  };
+
   const endSession = async (id) => {
-  try {
-    await supabase
-      .from('attendance_sessions')
-      .update({ is_active: false })
-      .eq('id', id);
-    
-    setSuccess('Session ended manually');
-    checkActiveSessions(); 
-    refetch();
-  } catch (error) {
-    console.error('Error ending session:', error);
-    setError('Failed to end session');
-  }
-};
+    try {
+      await api.endSession(id);
+      setSuccess('Session ended manually');
+      checkActiveSessions(); 
+      refetch();
+    } catch (error) {
+      console.error('Error ending session:', error);
+      setError('Failed to end session');
+    }
+  };
 
   const downloadQR = () => {
     const canvas = document.querySelector('canvas');
@@ -388,43 +337,41 @@ const autoEndSession = async (sessionId) => {
       )}
 
       {/* Live Sessions */}
-     {Object.entries(activeSessions).map(([courseId, session]) => {
-  const course = courses.find(c => c.id === courseId);
-  
-  // CRITICAL DEBUG - Check what's in activeSessions
-  console.log('🎯 RENDERING SESSION:', {
-    courseCode: course?.course_code,
-    sessionFromState: session,
-    attendance_records: session?.attendance_records,
-    recordsLength: session?.attendance_records?.length
-  });
-
-  const count = session?.attendance_records?.length || 0;
-  
-  // Force a number to ensure it's not undefined
-  const displayCount = Number(count);
-  
-  console.log('🔢 Count being passed:', displayCount);
-
-  return (
-    <LiveSessionCard
-      key={session.id}
-      session={session}
-      course={course}
-      count={displayCount}
-      // liveActivity={liveActivity}
-      onEndSession={endSession}
-      onShowQR={(session, course) => {
-        setNewSession({...session, course_code: course?.course_code, course_title: course?.course_title});
-        setShowQRModal(true);
-      }}
-    />
-  );
-})}
+      {Object.keys(activeSessions).length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-center gap-2 px-2">
+            <div className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></div>
+            <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Live Broadcasts</h2>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Object.entries(activeSessions).map(([courseId, session]) => {
+              const course = courses.find(c => c.id === courseId);
+              const count = session?.attendance_records?.length || 0;
+              
+              return (
+                <LiveSessionCard
+                  key={session.id}
+                  session={session}
+                  course={course}
+                  count={count}
+                  liveActivity={liveActivity}
+                  onEndSession={endSession}
+                  onShowQR={(session, course) => {
+                    setNewSession({...session, course_code: course?.course_code, course_title: course?.course_title});
+                    setShowQRModal(true);
+                  }}
+                />
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* Live Activity Feed */}
-      {showLiveFeed && (
+      {showLiveFeed && liveActivity.length > 0 && (
         <LiveActivityFeed
+          activities={liveActivity}
           onClose={() => setShowLiveFeed(false)}
         />
       )}
@@ -460,7 +407,7 @@ const autoEndSession = async (sessionId) => {
         mtbmCourseOptions={mtbmCourseOptions}
         semesters={semesters}
         user={user}
-        hocLevel={hocInfo?.level} // Pass HOC level to modal
+        hocLevel={hocInfo?.level}
       />
 
       {/* Session Modal */}

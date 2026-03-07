@@ -13,6 +13,7 @@
     "@fingerprintjs/fingerprintjs": "^5.0.1",
     "@supabase/supabase-js": "^2.97.0",
     "@tailwindcss/vite": "^4.2.0",
+    "@tanstack/react-query": "^5.90.21",
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
     "jsqr": "^1.4.0",

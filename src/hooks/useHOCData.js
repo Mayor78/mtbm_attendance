@@ -1,84 +1,35 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, queryKeys } from '../lib/api';
 import { supabase } from '../lib/supabase';
 
 export const useHOCData = (userId) => {
-  const [courses, setCourses] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [hocInfo, setHocInfo] = useState(null);
-  const [liveActivity, setLiveActivity] = useState([]);
-  const [stats, setStats] = useState({
-    totalCourses: 0,
-    totalStudents: 0,
-    totalSessions: 0,
-    activeSessions: 0,
-    averageAttendance: 0,
-    department: '',
-    level: ''
-  });
+  const queryClient = useQueryClient();
 
-  const fetchHOCData = useCallback(async () => {
-    if (!userId) {
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError('');
+  // Fetch HOC data
+  const hocQuery = useQuery({
+    queryKey: queryKeys.hocData(userId),
+    queryFn: async () => {
+      if (!userId) throw new Error('No user ID provided');
 
       console.log('👤 Fetching HOC student info for user:', userId);
 
-      // FIRST: Get HOC's student information (department and level)
-      const { data: student, error: studentError } = await supabase
-        .from('students')
-        .select('id, department, level, matric_no, full_name')
-        .eq('user_id', userId)
-        .single();
-
-      if (studentError) throw studentError;
+      // Get HOC's student information
+      const student = await api.fetchHOCStudentInfo(userId);
       
-      if (!student) {
-        throw new Error('Student profile not found');
-      }
-
       console.log('📚 HOC Student info:', student);
-      setHocInfo(student);
 
-      // SECOND: Get ALL courses for this HOC's department and level
-      const { data: coursesData, error: coursesError } = await supabase
-        .from('courses')
-        .select(`
-          id,
-          course_code,
-          course_title,
-          department,
-          level,
-          semester,
-          created_at
-        `)
-        .eq('department', student.department)
-        .eq('level', student.level)
-        .order('course_code');
-
-      if (coursesError) throw coursesError;
+      // Get ALL courses for this HOC's department and level
+      const coursesData = await api.fetchCoursesByDepartment(student.department, student.level);
 
       console.log(`📋 Found ${coursesData?.length || 0} courses for ${student.department} Level ${student.level}`);
-      setCourses(coursesData || []);
 
-      // THIRD: Get ALL students in this department and level (rule-based enrollment)
-      const { data: allStudents, error: studentsError } = await supabase
-        .from('students')
-        .select('id, matric_no, full_name')
-        .eq('department', student.department)
-        .eq('level', student.level);
-
-      if (studentsError) throw studentsError;
-
+      // Get ALL students in this department and level
+      const allStudents = await api.fetchStudentsByDepartmentLevel(student.department, student.level);
       const totalStudents = allStudents?.length || 0;
+      
       console.log(`👥 Found ${totalStudents} students in ${student.department} Level ${student.level}`);
 
-      // FOURTH: Get all sessions for these courses with attendance records
+      // Get all sessions for these courses with attendance records
       const courseIds = coursesData?.map(c => c.id) || [];
       
       let activeSessionsCount = 0;
@@ -147,8 +98,7 @@ export const useHOCData = (userId) => {
         });
       }
 
-      // Calculate average attendance based on rule-based enrollment
-      // Total possible attendance = totalStudents * totalSessionsCount
+      // Calculate average attendance
       const totalPossibleAttendance = totalStudents * totalSessionsCount;
       const avgAttendance = totalPossibleAttendance > 0
         ? Math.round((totalAttendance / totalPossibleAttendance) * 100)
@@ -164,33 +114,39 @@ export const useHOCData = (userId) => {
         avgPercentage: avgAttendance
       });
 
-      setLiveActivity(recentActivity);
+      return {
+        hocInfo: student,
+        courses: coursesData || [],
+        allStudents,
+        stats: {
+          totalCourses: coursesData?.length || 0,
+          totalStudents,
+          totalSessions: totalSessionsCount,
+          activeSessions: activeSessionsCount,
+          averageAttendance: avgAttendance,
+          department: student.department,
+          level: student.level,
+          totalAttendance
+        },
+        liveActivity: recentActivity
+      };
+    },
+    enabled: !!userId,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    retry: 2,
+  });
 
-      setStats({
-        totalCourses: coursesData?.length || 0,
-        totalStudents: totalStudents,
-        totalSessions: totalSessionsCount,
-        activeSessions: activeSessionsCount,
-        averageAttendance: avgAttendance,
-        department: student.department,
-        level: student.level,
-        totalAttendance: totalAttendance
-      });
+  // Get all students in HOC's department and level with attendance
+  const departmentStudentsQuery = useQuery({
+    queryKey: [...queryKeys.hocData(userId), 'departmentStudents'],
+    queryFn: async () => {
+      const hocInfo = hocQuery.data?.hocInfo;
+      const courses = hocQuery.data?.courses || [];
+      
+      if (!hocInfo || courses.length === 0) return [];
 
-    } catch (error) {
-      console.error('❌ Error in useHOCData:', error);
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [userId]);
-
-  // Get all students in HOC's department and level (rule-based)
-  const getDepartmentStudents = useCallback(async () => {
-    if (!hocInfo) return [];
-
-    try {
-      const { data, error } = await supabase
+      const { data: students, error } = await supabase
         .from('students')
         .select(`
           id,
@@ -209,24 +165,25 @@ export const useHOCData = (userId) => {
       // For each student, calculate their attendance for these courses
       const courseIds = courses.map(c => c.id);
       
-      const studentsWithAttendance = await Promise.all(data.map(async (student) => {
-        // Get all sessions for these courses
-        const { data: sessions } = await supabase
-          .from('attendance_sessions')
-          .select('id')
-          .in('course_id', courseIds);
+      // Get all sessions for these courses
+      const { data: sessions } = await supabase
+        .from('attendance_sessions')
+        .select('id')
+        .in('course_id', courseIds);
 
-        const totalSessions = sessions?.length || 0;
+      const totalSessions = sessions?.length || 0;
+      const sessionIds = sessions?.map(s => s.id) || [];
 
+      const studentsWithAttendance = await Promise.all((students || []).map(async (student) => {
         // Get student's attendance records
-        const { count: presentCount } = await supase
+        const { count: presentCount } = await supabase
           .from('attendance_records')
           .select('*', { count: 'exact', head: true })
           .eq('student_id', student.id)
-          .in('session_id', sessions?.map(s => s.id) || []);
+          .in('session_id', sessionIds);
 
         const attendanceRate = totalSessions > 0 
-          ? Math.round((presentCount / totalSessions) * 100) 
+          ? Math.round(((presentCount || 0) / totalSessions) * 100) 
           : 0;
 
         return {
@@ -239,93 +196,87 @@ export const useHOCData = (userId) => {
 
       return studentsWithAttendance || [];
 
-    } catch (error) {
-      console.error('Error fetching department students:', error);
-      return [];
-    }
-  }, [hocInfo, courses]);
+    },
+    enabled: !!hocQuery.data?.hocInfo && hocQuery.data?.courses.length > 0,
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Get attendance for a specific course
-  const getCourseAttendance = useCallback(async (courseId) => {
-    try {
-      const { data, error } = await supabase
-        .from('attendance_sessions')
-        .select(`
-          id,
-          start_time,
-          expires_at,
-          is_active,
-          attendance_records (
+  const useCourseAttendance = (courseId) => {
+    return useQuery({
+      queryKey: queryKeys.attendance(courseId),
+      queryFn: async () => {
+        const { data, error } = await supabase
+          .from('attendance_sessions')
+          .select(`
             id,
-            student_id,
-            scanned_at,
-            marked_manually,
-            manual_reason,
-            students (
-              matric_no,
-              full_name
+            start_time,
+            expires_at,
+            is_active,
+            attendance_records (
+              id,
+              student_id,
+              scanned_at,
+              marked_manually,
+              manual_reason,
+              students (
+                matric_no,
+                full_name
+              )
             )
-          )
-        `)
-        .eq('course_id', courseId)
-        .order('start_time', { ascending: false });
+          `)
+          .eq('course_id', courseId)
+          .order('start_time', { ascending: false });
 
-      if (error) throw error;
-      return data || [];
-
-    } catch (error) {
-      console.error('Error fetching course attendance:', error);
-      return [];
-    }
-  }, []);
+        if (error) throw error;
+        return data || [];
+      },
+      enabled: !!courseId,
+      staleTime: 2 * 60 * 1000, // 2 minutes
+    });
+  };
 
   // Get students for a specific course (rule-based)
-  const getCourseStudents = useCallback(async (courseId) => {
-    try {
-      // Get the course details first
-      const { data: course } = await supabase
-        .from('courses')
-        .select('department, level')
-        .eq('id', courseId)
-        .single();
+  const useCourseStudents = (courseId) => {
+    return useQuery({
+      queryKey: [...queryKeys.students(courseId)],
+      queryFn: async () => {
+        // Get the course details first
+        const { data: course, error: courseError } = await supabase
+          .from('courses')
+          .select('department, level')
+          .eq('id', courseId)
+          .single();
 
-      if (!course) return [];
+        if (courseError) throw courseError;
+        if (!course) return [];
 
-      // Get all students in that department and level (rule-based enrollment)
-      const { data, error } = await supabase
-        .from('students')
-        .select(`
-          id,
-          matric_no,
-          full_name,
-          level,
-          department,
-          email
-        `)
-        .eq('department', course.department)
-        .eq('level', course.level);
+        // Get all students in that department and level
+        const { data, error } = await supabase
+          .from('students')
+          .select(`
+            id,
+            matric_no,
+            full_name,
+            level,
+            department,
+            email
+          `)
+          .eq('department', course.department)
+          .eq('level', course.level);
 
-      if (error) throw error;
-      return data || [];
-
-    } catch (error) {
-      console.error('Error fetching course students:', error);
-      return [];
-    }
-  }, []);
-
-  useEffect(() => {
-    if (userId) {
-      fetchHOCData();
-    } else {
-      setLoading(false);
-    }
-  }, [userId, fetchHOCData]);
+        if (error) throw error;
+        return data || [];
+      },
+      enabled: !!courseId,
+      staleTime: 5 * 60 * 1000,
+    });
+  };
 
   // Group courses by department and level
-  const getGroupedCourses = useCallback(() => {
+  const getGroupedCourses = (courses) => {
     const grouped = {};
-    courses.forEach(course => {
+    (courses || []).forEach(course => {
       const key = `${course.department} - Level ${course.level}`;
       if (!grouped[key]) {
         grouped[key] = {
@@ -337,19 +288,51 @@ export const useHOCData = (userId) => {
       grouped[key].courses.push(course);
     });
     return grouped;
-  }, [courses]);
+  };
 
   return {
-    courses,
-    groupedCourses: getGroupedCourses(),
-    hocInfo,
-    loading,
-    error,
-    stats,
-    liveActivity,
-    refetch: fetchHOCData,
-    getDepartmentStudents,
-    getCourseAttendance,
-    getCourseStudents
+    // Data
+    courses: hocQuery.data?.courses || [],
+    groupedCourses: getGroupedCourses(hocQuery.data?.courses),
+    hocInfo: hocQuery.data?.hocInfo,
+    stats: hocQuery.data?.stats || {
+      totalCourses: 0,
+      totalStudents: 0,
+      totalSessions: 0,
+      activeSessions: 0,
+      averageAttendance: 0,
+      department: '',
+      level: '',
+      totalAttendance: 0
+    },
+    liveActivity: hocQuery.data?.liveActivity || [],
+    departmentStudents: departmentStudentsQuery.data || [],
+    
+    // Loading states
+    loading: hocQuery.isLoading || departmentStudentsQuery.isLoading,
+    isFetching: hocQuery.isFetching || departmentStudentsQuery.isFetching,
+    
+    // Errors
+    error: hocQuery.error || departmentStudentsQuery.error,
+    
+    // Query status
+    isSuccess: hocQuery.isSuccess,
+    isError: hocQuery.isError,
+    
+    // Actions
+    refetch: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.hocData(userId) });
+    },
+    
+    // Helper hooks
+    useCourseAttendance,
+    useCourseStudents,
+    
+    // Manual refetch for department students
+    refetchDepartmentStudents: () => {
+      queryClient.invalidateQueries({ 
+        queryKey: [...queryKeys.hocData(userId), 'departmentStudents'] 
+      });
+    }
   };
 };

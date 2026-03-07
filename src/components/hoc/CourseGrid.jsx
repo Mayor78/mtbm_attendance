@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookMarked, RefreshCw, GraduationCap } from 'lucide-react';
+import { BookMarked, RefreshCw, GraduationCap, Plus } from 'lucide-react';
 import CourseCard from './CourseCard';
 import Pagination from './Pagination';
 
@@ -16,39 +16,48 @@ const CourseGrid = ({
 }) => {
   if (courses.length === 0) {
     return (
-      <div className="bg-white border-2 border-dashed border-slate-200 rounded-[2.5rem] p-12 text-center">
-        <div className="w-20 h-20 bg-slate-50 rounded-3xl flex items-center justify-center mx-auto mb-6 text-slate-300">
-          <GraduationCap size={40} />
+      <div className="bg-white border border-gray-100 rounded-2xl p-12 text-center">
+        <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
+          <GraduationCap size={36} className="text-gray-300" />
         </div>
-        <h3 className="text-slate-900 font-black text-xl">No courses registered</h3>
-        <p className="text-slate-500 mb-8 max-w-xs mx-auto">
-          Build your academic portfolio by adding your first course today.
+        <h3 className="text-gray-900 font-semibold text-lg mb-2">No Courses Yet</h3>
+        <p className="text-gray-400 text-sm mb-6 max-w-sm mx-auto">
+          Get started by adding your first course.
         </p>
         <button 
           onClick={onAddCourse} 
-          className="bg-slate-900 text-white px-8 py-3.5 rounded-2xl font-bold hover:shadow-xl transition-all"
+          className="inline-flex items-center gap-2 bg-gray-900 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
         >
-          Add First Course
+          <Plus size={16} />
+          Add Course
         </button>
       </div>
     );
   }
 
   return (
-    <section className="space-y-6">
-      <div className="flex items-center justify-between px-2">
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
-            <BookMarked size={20} />
-          </div>
-          <h2 className="text-xl font-black text-slate-800 tracking-tight">My Courses</h2>
+          <BookMarked size={18} className="text-gray-400" />
+          <h2 className="text-sm font-medium text-gray-700">My Courses</h2>
+          <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-full">
+            {courses.length}
+          </span>
         </div>
-        <button onClick={onRefresh} className="p-2 text-slate-400 hover:text-indigo-600 transition-colors">
-          <RefreshCw size={18} />
+        
+        <button 
+          onClick={onRefresh} 
+          className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-full transition-colors"
+          title="Refresh"
+        >
+          <RefreshCw size={16} />
         </button>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+      {/* Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {paginatedCourses.map((course) => (
           <CourseCard
             key={course.id}
@@ -59,14 +68,17 @@ const CourseGrid = ({
         ))}
       </div>
 
+      {/* Pagination */}
       {totalPages > 1 && (
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={onPageChange}
-        />
+        <div className="pt-4 border-t border-gray-100">
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={onPageChange}
+          />
+        </div>
       )}
-    </section>
+    </div>
   );
 };
 

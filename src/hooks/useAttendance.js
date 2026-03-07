@@ -575,6 +575,7 @@ export const useHOCAttendance = (userId) => {
 };
 
 export const useCourseAttendance = (courseId) => {
+  const [course, setCourse] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -590,6 +591,20 @@ export const useCourseAttendance = (courseId) => {
       setLoading(true);
       setError('');
 
+      console.log('📚 Fetching course info for:', courseId);
+
+      // Get course info first
+      const { data: courseData, error: courseError } = await supabase
+        .from('courses')
+        .select('*')
+        .eq('id', courseId)
+        .single();
+
+      if (courseError) throw courseError;
+      
+      console.log('✅ Course info:', courseData);
+      setCourse(courseData);
+
       // Get all sessions for this course
       const { data: sessionsData, error: sessionsError } = await supabase
         .from('attendance_sessions')
@@ -599,6 +614,8 @@ export const useCourseAttendance = (courseId) => {
 
       if (sessionsError) throw sessionsError;
 
+      console.log('📅 Sessions:', sessionsData);
+
       if (!sessionsData || sessionsData.length === 0) {
         setSessions([]);
         return;
@@ -606,35 +623,33 @@ export const useCourseAttendance = (courseId) => {
 
       const sessionIds = sessionsData.map(s => s.id);
       
-      // Get attendance records from the view (now includes location fields)
+      // Get attendance records
       const { data: recordsData, error: recordsError } = await supabase
-        .from('attendance_with_students')
-        .select('*')
+        .from('attendance_records')
+        .select(`
+          *,
+          students (
+            matric_no,
+            full_name,
+            profiles (
+              full_name,
+              email
+            )
+          )
+        `)
         .in('session_id', sessionIds);
 
       if (recordsError) throw recordsError;
 
-      console.log('Raw view data with location:', recordsData);
+      console.log('📊 Attendance records:', recordsData);
 
-      // Group records by session with ALL data including location
+      // Group records by session
       const recordsBySession = {};
       recordsData?.forEach(record => {
         if (!recordsBySession[record.session_id]) {
           recordsBySession[record.session_id] = [];
         }
-        
-        recordsBySession[record.session_id].push({
-          id: record.record_id,
-          scanned_at: record.scanned_at,
-          session_id: record.session_id,
-          student_id: record.student_id,
-          student_name: record.full_name,
-          matric_no: record.matric_no,
-          location_lat: record.location_lat,
-          location_lng: record.location_lng,
-          location_accuracy: record.location_accuracy,
-          device_info: record.device_info
-        });
+        recordsBySession[record.session_id].push(record);
       });
 
       // Combine sessions with their records
@@ -645,13 +660,43 @@ export const useCourseAttendance = (courseId) => {
 
       setSessions(sessionsWithRecords);
     } catch (error) {
-      console.error('Error fetching course attendance:', error);
+      console.error('❌ Error fetching course attendance:', error);
       setError(error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  return { sessions, loading, error, refetch: fetchCourseAttendance };
+   // Add deleteAttendance function
+  const deleteAttendance = async (recordId) => {
+    try {
+      const { error } = await supabase
+        .from('attendance_records')
+        .delete()
+        .eq('id', recordId);
+
+      if (error) throw error;
+      
+      // Refresh data after deletion
+      await fetchCourseAttendance();
+      return true;
+    } catch (error) {
+      console.error('Error deleting attendance:', error);
+      throw error;
+    }
+  };
+
+  const refetch = () => {
+    fetchCourseAttendance();
+  };
+
+  return { 
+    course,  // Now returning course data
+    sessions, 
+    loading, 
+    error, 
+    deleteAttendance,
+    refetch 
+  };
 };
 
