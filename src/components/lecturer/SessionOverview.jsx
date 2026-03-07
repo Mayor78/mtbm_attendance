@@ -1,13 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { Calendar, Filter, Download, ChevronDown, ChevronUp, BookOpen, Clock, Users, ArrowRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Calendar, Download, ChevronDown, ChevronUp, BookOpen, Clock, Users } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import SessionDetailsModal from './SessionDetailsModal';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 const SessionOverview = ({ courses, lecturerId }) => {
-  const [groupedSessions, setGroupedSessions] = useState({});
-  const [loading, setLoading] = useState(true);
   const [selectedSession, setSelectedSession] = useState(null);
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [showModal, setShowModal] = useState(false);
@@ -15,78 +14,78 @@ const SessionOverview = ({ courses, lecturerId }) => {
   const [dateFilter, setDateFilter] = useState('all');
   const [courseFilter, setCourseFilter] = useState('all');
 
-  // --- LOGIC PRESERVED ---
-  useEffect(() => {
-    fetchAllSessions();
-  }, [courses]);
+  // Fetch sessions with TanStack Query
+  const { data: groupedSessions = {}, isLoading } = useQuery({
+    queryKey: ['sessions', lecturerId, dateFilter, courseFilter],
+    queryFn: async () => {
+      if (!courses || courses.length === 0) return {};
 
-  const fetchAllSessions = async () => {
-    if (!courses || courses.length === 0) return;
-    setLoading(true);
-    try {
       const courseIds = courses.map(c => c.id);
-      const { data, error } = await supabase
+      
+      // Fetch sessions
+      const { data: sessions, error } = await supabase
         .from('attendance_sessions')
-        .select(`*, attendance_records (id, student_id, scanned_at, marked_manually, manual_reason)`)
+        .select(`
+          *,
+          attendance_records (
+            id,
+            student_id,
+            scanned_at,
+            marked_manually,
+            manual_reason
+          )
+        `)
         .in('course_id', courseIds)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      const grouped = {};
-      for (const session of data || []) {
-        const course = courses.find(c => c.id === session.course_id);
-        if (course) {
-          if (!grouped[course.id]) {
-            const { count } = await supabase
-              .from('students')
-              .select('*', { count: 'exact', head: true })
-              .eq('department', course.department)
-              .eq('level', course.level);
-            
-            grouped[course.id] = {
-              course: course,
-              totalStudents: count || 0,
-              sessions: []
-            };
-          }
-          grouped[course.id].sessions.push({
-            ...session,
-            totalStudents: grouped[course.id].totalStudents
-          });
-        }
+      // Apply date filter
+      let filteredSessions = sessions || [];
+      if (dateFilter !== 'all') {
+        const now = new Date();
+        const cutoff = new Date();
+        if (dateFilter === 'week') cutoff.setDate(now.getDate() - 7);
+        if (dateFilter === 'month') cutoff.setMonth(now.getMonth() - 1);
+        filteredSessions = filteredSessions.filter(s => new Date(s.created_at) >= cutoff);
       }
-      setGroupedSessions(grouped);
-      const courseIds_list = Object.keys(grouped);
-      if (courseIds_list.length > 0 && Object.keys(expandedCourses).length === 0) {
-        setExpandedCourses({ [courseIds_list[0]]: true });
-      }
-    } catch (error) {
-      console.error('Error fetching sessions:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
+      // Group by course
+      const grouped = {};
+      for (const session of filteredSessions) {
+        const course = courses.find(c => c.id === session.course_id);
+        if (!course) continue;
+
+        if (!grouped[course.id]) {
+          const { count } = await supabase
+            .from('students')
+            .select('*', { count: 'exact', head: true })
+            .eq('department', course.department)
+            .eq('level', course.level);
+          
+          grouped[course.id] = {
+            course,
+            totalStudents: count || 0,
+            sessions: []
+          };
+        }
+        
+        grouped[course.id].sessions.push({
+          ...session,
+          totalStudents: grouped[course.id].totalStudents
+        });
+      }
+
+      return grouped;
+    },
+    enabled: courses.length > 0,
+    staleTime: 2 * 60 * 1000, // 2 minutes
+  });
+
+  // Apply course filter
   const filteredGroupedSessions = Object.entries(groupedSessions).reduce((acc, [courseId, data]) => {
     if (courseFilter !== 'all' && courseId !== courseFilter) return acc;
-    const filteredSessions = data.sessions.filter(session => {
-      if (dateFilter !== 'all') {
-        const sessionDate = new Date(session.created_at);
-        const now = new Date();
-        if (dateFilter === 'week') {
-          const weekAgo = new Date(now.setDate(now.getDate() - 7));
-          if (sessionDate < weekAgo) return false;
-        } else if (dateFilter === 'month') {
-          const monthAgo = new Date(now.setMonth(now.getMonth() - 1));
-          if (sessionDate < monthAgo) return false;
-        }
-      }
-      return true;
-    });
-    if (filteredSessions.length > 0) {
-      acc[courseId] = { ...data, sessions: filteredSessions };
-    }
+    acc[courseId] = data;
     return acc;
   }, {});
 
@@ -101,11 +100,10 @@ const SessionOverview = ({ courses, lecturerId }) => {
   };
 
   const handleExportCourse = (courseData) => {
-    const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text(`${courseData.course.course_code} - Session Report`, 14, 20);
-    doc.setFontSize(11);
-    doc.text(`Course: ${courseData.course.course_title}`, 14, 30);
+    const doc = new jsPDF({ orientation: 'landscape' });
+    doc.setFontSize(16);
+    doc.text(`${courseData.course.course_code} - Sessions`, 14, 20);
+    
     const tableRows = courseData.sessions.map(s => [
       new Date(s.created_at).toLocaleDateString(),
       new Date(s.start_time).toLocaleTimeString(),
@@ -113,181 +111,208 @@ const SessionOverview = ({ courses, lecturerId }) => {
       `${s.attendance_records?.length || 0}/${courseData.totalStudents}`,
       `${Math.round((s.attendance_records?.length || 0) / courseData.totalStudents * 100)}%`
     ]);
+
     autoTable(doc, {
       head: [["Date", "Time", "Status", "Attendance", "Rate"]],
       body: tableRows,
-      startY: 60,
-      headStyles: { fillColor: [79, 70, 229] }
+      startY: 30,
+      headStyles: { fillColor: [31, 41, 55] },
+      styles: { fontSize: 9 }
     });
+    
     doc.save(`${courseData.course.course_code}_sessions.pdf`);
   };
 
   const handleExportAll = () => {
-    const doc = new jsPDF();
-    let yOffset = 30;
+    const doc = new jsPDF({ orientation: 'landscape' });
+    let yOffset = 20;
+    
     Object.values(filteredGroupedSessions).forEach((courseData, index) => {
-      if (index > 0) { doc.addPage(); yOffset = 20; }
-      doc.text(`${courseData.course.course_code}`, 14, yOffset);
+      if (index > 0) {
+        doc.addPage();
+        yOffset = 20;
+      }
+      
+      doc.setFontSize(14);
+      doc.text(courseData.course.course_code, 14, yOffset);
+      
       const tableRows = courseData.sessions.map(s => [
         new Date(s.created_at).toLocaleDateString(),
         new Date(s.start_time).toLocaleTimeString(),
         s.is_active ? 'Active' : 'Ended',
-        `${s.attendance_records?.length || 0}/${courseData.totalStudents}`
+        `${s.attendance_records?.length || 0}/${courseData.totalStudents}`,
+        `${Math.round((s.attendance_records?.length || 0) / courseData.totalStudents * 100)}%`
       ]);
-      autoTable(doc, { head: [["Date", "Time", "Status", "Att"]], body: tableRows, startY: yOffset + 10 });
+
+      autoTable(doc, {
+        head: [["Date", "Time", "Status", "Att", "Rate"]],
+        body: tableRows,
+        startY: yOffset + 10,
+        headStyles: { fillColor: [31, 41, 55] },
+        styles: { fontSize: 8 }
+      });
+      
       yOffset = doc.lastAutoTable.finalY + 10;
     });
+    
     doc.save(`all_sessions.pdf`);
   };
-  // --- END LOGIC ---
 
-  if (loading) {
+  if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 bg-white rounded-3xl border border-gray-100">
-        <div className="relative flex h-10 w-10">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-20"></span>
-          <div className="relative inline-flex rounded-full h-10 w-10 border-t-2 border-indigo-600 animate-spin"></div>
+      <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
+        <div className="flex justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-gray-200 border-t-gray-900"></div>
         </div>
-        <p className="mt-4 text-xs font-black uppercase tracking-widest text-gray-400">Syncing Sessions...</p>
+        <p className="mt-3 text-sm text-gray-400">Loading sessions...</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Dynamic Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
-        <div>
-          <h2 className="text-xl font-black text-gray-900 tracking-tight flex items-center gap-2">
-            <Calendar className="text-indigo-600" size={22} strokeWidth={2.5} />
-            Session Logs
-          </h2>
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-1">Manage Historical Data</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 bg-gray-50 p-1.5 rounded-2xl border border-gray-100">
-            <select
-              value={courseFilter}
-              onChange={(e) => setCourseFilter(e.target.value)}
-              className="bg-transparent px-3 py-1.5 text-xs font-bold text-gray-600 outline-none"
-            >
-              <option value="all">All Courses</option>
-              {courses.map(course => <option key={course.id} value={course.id}>{course.course_code}</option>)}
-            </select>
-            <div className="w-[1px] h-4 bg-gray-200" />
-            <select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              className="bg-transparent px-3 py-1.5 text-xs font-bold text-gray-600 outline-none"
-            >
-              <option value="all">All Time</option>
-              <option value="week">Last 7 Days</option>
-              <option value="month">Last 30 Days</option>
-            </select>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="bg-white rounded-xl border border-gray-100 p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Calendar size={18} className="text-gray-400" />
+            <h2 className="text-sm font-medium text-gray-700">Sessions</h2>
           </div>
 
-          <button
-            onClick={handleExportAll}
-            className="flex items-center gap-2 px-5 py-3 bg-gray-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all active:scale-95 shadow-lg shadow-gray-200"
-          >
-            <Download size={14} />
-            Export All
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex border border-gray-200 rounded-lg overflow-hidden">
+              <select
+                value={courseFilter}
+                onChange={(e) => setCourseFilter(e.target.value)}
+                className="px-2 py-1.5 text-xs bg-white border-0 outline-none"
+              >
+                <option value="all">All Courses</option>
+                {courses.map(course => (
+                  <option key={course.id} value={course.id}>{course.course_code}</option>
+                ))}
+              </select>
+              <div className="w-px bg-gray-200" />
+              <select
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className="px-2 py-1.5 text-xs bg-white border-0 outline-none"
+              >
+                <option value="all">All Time</option>
+                <option value="week">7 Days</option>
+                <option value="month">30 Days</option>
+              </select>
+            </div>
+
+            <button
+              onClick={handleExportAll}
+              className="p-1.5 bg-gray-900 text-white rounded-lg hover:bg-gray-800"
+              title="Export all"
+            >
+              <Download size={16} />
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Course Groups */}
-      <div className="space-y-4">
-        {Object.entries(filteredGroupedSessions).map(([courseId, courseData]) => (
-          <div key={courseId} className="group bg-white rounded-3xl border border-gray-100 overflow-hidden hover:border-indigo-100 transition-all shadow-sm">
-            <div 
-              className={`p-5 cursor-pointer transition-colors ${expandedCourses[courseId] ? 'bg-indigo-50/30' : 'bg-white'}`}
-              onClick={() => toggleCourse(courseId)}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className={`p-3 rounded-2xl transition-all ${expandedCourses[courseId] ? 'bg-indigo-600 text-white rotate-12' : 'bg-gray-50 text-gray-400'}`}>
-                    <BookOpen size={20} />
-                  </div>
+      <div className="space-y-2">
+        {Object.entries(filteredGroupedSessions).length === 0 ? (
+          <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
+            <Calendar size={32} className="mx-auto text-gray-300 mb-2" />
+            <p className="text-sm text-gray-500">No sessions found</p>
+          </div>
+        ) : (
+          Object.entries(filteredGroupedSessions).map(([courseId, courseData]) => (
+            <div key={courseId} className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+              {/* Course Header */}
+              <div 
+                className="p-3 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+                onClick={() => toggleCourse(courseId)}
+              >
+                <div className="flex items-center gap-3">
+                  <BookOpen size={16} className="text-gray-400" />
                   <div>
-                    <h3 className="font-black text-gray-900 leading-none">{courseData.course.course_code}</h3>
-                    <p className="text-xs font-bold text-gray-400 mt-1.5 uppercase tracking-tighter">
-                      {courseData.sessions.length} Sessions • {courseData.totalStudents} Students
+                    <h3 className="text-sm font-medium text-gray-900">{courseData.course.course_code}</h3>
+                    <p className="text-xs text-gray-400">
+                      {courseData.sessions.length} sessions • {courseData.totalStudents} students
                     </p>
                   </div>
                 </div>
                 
-                <div className="flex items-center gap-4">
-                   <button
+                <div className="flex items-center gap-2">
+                  <button
                     onClick={(e) => { e.stopPropagation(); handleExportCourse(courseData); }}
-                    className="hidden sm:flex items-center gap-2 px-4 py-2 bg-white border border-gray-100 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-indigo-600 hover:border-indigo-200 transition-all"
+                    className="p-1 text-gray-400 hover:text-gray-600"
                   >
-                    <Download size={14} /> Report
+                    <Download size={14} />
                   </button>
-                  <div className={`p-2 rounded-full transition-transform duration-300 ${expandedCourses[courseId] ? 'rotate-180 bg-indigo-100 text-indigo-600' : 'text-gray-300'}`}>
-                    <ChevronDown size={20} />
-                  </div>
+                  {expandedCourses[courseId] ? 
+                    <ChevronUp size={18} className="text-gray-400" /> : 
+                    <ChevronDown size={18} className="text-gray-400" />
+                  }
                 </div>
               </div>
-            </div>
 
-            {expandedCourses[courseId] && (
-              <div className="p-4 sm:p-6 bg-white border-t border-gray-50 space-y-3">
-                {courseData.sessions.map(session => (
-                  <div 
-                    key={session.id}
-                    className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl border border-gray-50 hover:bg-gray-50 transition-all gap-4"
-                  >
-                    <div className="flex items-center gap-6">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs font-black text-gray-900 uppercase">
-                          <Calendar size={12} className="text-indigo-500" />
-                          {new Date(session.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                        </div>
-                        <div className="flex items-center gap-2 text-[10px] font-bold text-gray-400">
-                          <Clock size={12} />
-                          {new Date(session.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </div>
+              {/* Sessions List */}
+              {expandedCourses[courseId] && (
+                <div className="border-t border-gray-50">
+                  {courseData.sessions.map(session => {
+                    const attendanceCount = session.attendance_records?.length || 0;
+                    const attendanceRate = Math.round((attendanceCount / courseData.totalStudents) * 100);
 
-                      <div className="h-8 w-[1px] bg-gray-100 hidden sm:block" />
-
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs font-black text-gray-900 uppercase">
-                          <Users size={12} className="text-indigo-500" />
-                          {session.attendance_records?.length || 0} / {courseData.totalStudents}
-                        </div>
-                        <div className="w-16 h-1 bg-gray-100 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-indigo-500" 
-                            style={{ width: `${Math.round((session.attendance_records?.length || 0) / courseData.totalStudents * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-4 sm:pt-0 border-t sm:border-0 border-gray-50">
-                      <span className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border ${
-                        session.is_active ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-gray-50 text-gray-400 border-gray-100'
-                      }`}>
-                        {session.is_active ? 'Active' : 'Ended'}
-                      </span>
-                      
-                      <button
-                        onClick={() => handleViewDetails(session, courseData.course)}
-                        className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all group/btn"
+                    return (
+                      <div 
+                        key={session.id}
+                        className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-gray-50 border-b border-gray-50 last:border-0"
                       >
-                        Details
-                        <ArrowRight size={12} className="group-hover/btn:translate-x-1 transition-transform" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2 text-xs">
+                            <Calendar size={12} className="text-gray-400" />
+                            <span>{new Date(session.created_at).toLocaleDateString()}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs">
+                            <Clock size={12} className="text-gray-400" />
+                            <span>{new Date(session.start_time).toLocaleTimeString()}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between sm:justify-end gap-4">
+                          <div className="flex items-center gap-2">
+                            <Users size={12} className="text-gray-400" />
+                            <span className="text-xs">{attendanceCount}/{courseData.totalStudents}</span>
+                            <div className="w-12 h-1 bg-gray-100 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-gray-900" 
+                                style={{ width: `${attendanceRate}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${
+                              session.is_active 
+                                ? 'bg-green-50 text-green-600' 
+                                : 'bg-gray-50 text-gray-400'
+                            }`}>
+                              {session.is_active ? 'Active' : 'Ended'}
+                            </span>
+                            
+                            <button
+                              onClick={() => handleViewDetails(session, courseData.course)}
+                              className="text-xs text-gray-400 hover:text-gray-600"
+                            >
+                              View
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))
+        )}
       </div>
 
       <SessionDetailsModal

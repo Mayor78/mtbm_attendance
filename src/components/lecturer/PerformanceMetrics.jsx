@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { PieChart, TrendingUp, TrendingDown, Loader } from 'lucide-react';
+import { PieChart, TrendingUp, TrendingDown } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 const PerformanceMetrics = ({ courses, groupedCourses, dateRange }) => {
@@ -17,95 +17,68 @@ const PerformanceMetrics = ({ courses, groupedCourses, dateRange }) => {
       const metricsData = [];
 
       for (const [key, group] of Object.entries(groupedCourses)) {
-        // Get department and level from the group key
         const [department, levelPart] = key.split(' - Level ');
         const level = levelPart;
 
-        console.log(`📊 Calculating metrics for ${department} Level ${level}`);
-
-        // Get all students in this department and level
-        const { count: studentCount, error: studentError } = await supabase
+        // Get student count
+        const { count: studentCount } = await supabase
           .from('students')
           .select('*', { count: 'exact', head: true })
           .eq('department', department)
           .eq('level', level);
 
-        if (studentError) throw studentError;
-        
         const totalStudents = studentCount || 0;
-
-        // Get all course IDs for this group
         const courseIds = group.courses.map(c => c.id);
 
-        // Get date filter based on dateRange
-        let dateFilter = {};
-        const now = new Date();
-        if (dateRange === 'week') {
-          const weekAgo = new Date(now.setDate(now.getDate() - 7));
-          dateFilter = { gte: weekAgo.toISOString() };
-        } else if (dateRange === 'month') {
-          const monthAgo = new Date(now.setMonth(now.getMonth() - 1));
-          dateFilter = { gte: monthAgo.toISOString() };
-        }
-
-        // Get sessions for these courses
+        // Date filter
         let query = supabase
           .from('attendance_sessions')
-          .select('id, created_at')
+          .select('id')
           .in('course_id', courseIds);
 
-        if (dateFilter.gte) {
-          query = query.gte('created_at', dateFilter.gte);
+        if (dateRange === 'week') {
+          const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+          query = query.gte('created_at', weekAgo);
+        } else if (dateRange === 'month') {
+          const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+          query = query.gte('created_at', monthAgo);
         }
 
-        const { data: sessions, error: sessionsError } = await query;
-
-        if (sessionsError) throw sessionsError;
-
+        const { data: sessions } = await query;
         const totalSessions = sessions?.length || 0;
 
-        // Get attendance records
+        // Attendance records
         let totalAttendance = 0;
-        
         if (totalSessions > 0) {
           const sessionIds = sessions.map(s => s.id);
-          
-          const { count: attendanceCount, error: attendanceError } = await supabase
+          const { count } = await supabase
             .from('attendance_records')
             .select('*', { count: 'exact', head: true })
             .in('session_id', sessionIds);
-
-          if (attendanceError) throw attendanceError;
-          
-          totalAttendance = attendanceCount || 0;
+          totalAttendance = count || 0;
         }
 
-        // Calculate attendance percentage
-        const totalPossibleAttendance = totalStudents * totalSessions;
-        const attendancePercentage = totalPossibleAttendance > 0
-          ? Math.round((totalAttendance / totalPossibleAttendance) * 100)
-          : 0;
+        // Calculate percentage
+        const totalPossible = totalStudents * totalSessions;
+        const percentage = totalPossible > 0 ? Math.round((totalAttendance / totalPossible) * 100) : 0;
 
-        // Determine trend based on previous period (simplified)
-        // In a real app, you'd compare with previous week/month
-        const trend = attendancePercentage >= 75 ? 'up' : attendancePercentage >= 50 ? 'stable' : 'down';
+        // Simple trend based on percentage
+        const trend = percentage >= 75 ? 'up' : percentage >= 50 ? 'stable' : 'down';
 
         metricsData.push({
-          group: key,
           department,
           level,
-          attendance: attendancePercentage,
+          percentage,
           trend,
           students: totalStudents,
-          totalSessions,
-          totalAttendance
+          sessions: totalSessions,
+          attendance: totalAttendance
         });
       }
 
       setMetrics(metricsData);
-
     } catch (error) {
-      console.error('Error calculating metrics:', error);
+      console.error('Error:', error);
     } finally {
       setLoading(false);
     }
@@ -113,13 +86,9 @@ const PerformanceMetrics = ({ courses, groupedCourses, dateRange }) => {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-xl p-6 border border-slate-100">
-        <div className="flex items-center gap-2 mb-4">
-          <PieChart size={18} className="text-indigo-500" />
-          <h3 className="font-semibold">Performance by Class</h3>
-        </div>
-        <div className="flex justify-center py-8">
-          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+      <div className="bg-white border border-gray-100 rounded-lg p-4">
+        <div className="flex items-center justify-center py-6">
+          <div className="animate-spin rounded-full h-5 w-5 border-2 border-gray-200 border-t-gray-900"></div>
         </div>
       </div>
     );
@@ -127,97 +96,79 @@ const PerformanceMetrics = ({ courses, groupedCourses, dateRange }) => {
 
   if (metrics.length === 0) {
     return (
-      <div className="bg-white rounded-xl p-6 border border-slate-100">
-        <div className="flex items-center gap-2 mb-4">
-          <PieChart size={18} className="text-indigo-500" />
-          <h3 className="font-semibold">Performance by Class</h3>
-        </div>
-        <p className="text-sm text-slate-400 text-center py-4">
-          No performance data available
-        </p>
+      <div className="bg-white border border-gray-100 rounded-lg p-4">
+        <p className="text-sm text-gray-400 text-center py-4">No data available</p>
       </div>
     );
   }
 
   const getTrendIcon = (trend) => {
-    switch(trend) {
-      case 'up':
-        return <TrendingUp size={14} className="text-green-500" />;
-      case 'down':
-        return <TrendingDown size={14} className="text-red-500" />;
-      default:
-        return <span className="w-3.5 h-3.5 rounded-full bg-yellow-400"></span>;
-    }
+    if (trend === 'up') return <TrendingUp size={12} className="text-green-500" />;
+    if (trend === 'down') return <TrendingDown size={12} className="text-red-500" />;
+    return null;
   };
 
-  const getAttendanceColor = (percentage) => {
+  const getBarColor = (percentage) => {
     if (percentage >= 75) return 'bg-green-500';
     if (percentage >= 50) return 'bg-yellow-500';
     return 'bg-red-500';
   };
 
-  const getTextColor = (percentage) => {
-    if (percentage >= 75) return 'text-green-600';
-    if (percentage >= 50) return 'text-yellow-600';
-    return 'text-red-600';
-  };
+  const avgPercentage = metrics.length > 0 
+    ? Math.round(metrics.reduce((acc, m) => acc + m.percentage, 0) / metrics.length) 
+    : 0;
 
   return (
-    <div className="bg-white rounded-xl p-4 border border-slate-100">
-      <div className="flex items-center gap-2 mb-4">
-        <PieChart size={18} className="text-indigo-500" />
-        <h3 className="font-semibold">Performance by Class</h3>
-        <span className="text-xs text-slate-400 ml-auto">
-          {dateRange === 'week' ? 'Last 7 days' : 
-           dateRange === 'month' ? 'Last 30 days' : 'This semester'}
+    <div className="bg-white border border-gray-100 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <PieChart size={16} className="text-gray-400" />
+          <h3 className="text-sm font-medium text-gray-700">Class Performance</h3>
+        </div>
+        <span className="text-xs text-gray-400">
+          {dateRange === 'week' ? '7d' : dateRange === 'month' ? '30d' : 'all'}
         </span>
       </div>
 
-      <div className="space-y-4">
-        {metrics.map((metric, index) => (
-          <div key={index} className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <div>
-                <span className="font-medium text-slate-700">{metric.department}</span>
-                <span className="text-xs text-slate-400 ml-2">Level {metric.level}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className={`font-medium ${getTextColor(metric.attendance)}`}>
-                  {metric.attendance}%
+      <div className="space-y-3">
+        {metrics.map((metric, i) => (
+          <div key={i} className="space-y-1">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-gray-600">
+                {metric.department} L{metric.level}
+              </span>
+              <div className="flex items-center gap-1">
+                <span className={`font-medium ${
+                  metric.percentage >= 75 ? 'text-green-600' :
+                  metric.percentage >= 50 ? 'text-yellow-600' : 'text-red-600'
+                }`}>
+                  {metric.percentage}%
                 </span>
                 {getTrendIcon(metric.trend)}
               </div>
             </div>
-
-            {/* Progress Bar */}
-            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
               <div 
-                className={`h-full rounded-full ${getAttendanceColor(metric.attendance)}`}
-                style={{ width: `${metric.attendance}%` }}
+                className={`h-full rounded-full ${getBarColor(metric.percentage)}`}
+                style={{ width: `${metric.percentage}%` }}
               />
             </div>
-
-            {/* Stats Row */}
-            <div className="flex justify-between text-xs text-slate-400">
+            <div className="flex justify-between text-[10px] text-gray-400">
               <span>{metric.students} students</span>
-              <span>{metric.totalSessions} sessions</span>
-              <span>{metric.totalAttendance} check-ins</span>
+              <span>{metric.sessions} sessions</span>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Summary */}
-      <div className="mt-4 pt-3 border-t border-slate-100">
-        <div className="flex justify-between text-xs">
-          <span className="text-slate-500">Average across all classes:</span>
-          <span className="font-medium text-slate-700">
-            {metrics.length > 0 
-              ? Math.round(metrics.reduce((acc, m) => acc + m.attendance, 0) / metrics.length) 
-              : 0}%
-          </span>
+      {metrics.length > 1 && (
+        <div className="mt-3 pt-2 border-t border-gray-100">
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-400">Average</span>
+            <span className="font-medium text-gray-700">{avgPercentage}%</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
