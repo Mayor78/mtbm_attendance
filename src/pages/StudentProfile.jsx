@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { User, Mail, Hash, BookOpen, GraduationCap, Save, AlertCircle, CheckCircle, LogOut } from 'lucide-react';
+import { User, Mail, Hash, BookOpen, GraduationCap, Save, AlertCircle, CheckCircle, LogOut, ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const StudentProfile = () => {
@@ -13,31 +13,27 @@ const StudentProfile = () => {
   const [success, setSuccess] = useState('');
   const [error, setError] = useState('');
   
-  // Form states - pre-filled with existing data
   const [fullName, setFullName] = useState('');
   const [matricNo, setMatricNo] = useState('');
   const [department, setDepartment] = useState('');
   const [level, setLevel] = useState('');
-  const [email] = useState(user?.email || ''); // Email is fixed
+  const [email] = useState(user?.email || '');
 
   useEffect(() => {
     if (profile && student) {
-      setFullName(profile.full_name || 'hh');
+      setFullName(profile.full_name || '');
       setMatricNo(student.matric_no || '');
       setDepartment(student.department || '');
       setLevel(student.level || '');
     }
   }, [profile, student]);
 
- 
   const handleUpdateProfile = async () => {
     setLoading(true);
     setError('');
     setSuccess('');
-    await refreshData();
 
     try {
-      // Update profiles table
       const { error: profileError } = await supabase
         .from('profiles')
         .update({ full_name: fullName })
@@ -45,7 +41,6 @@ const StudentProfile = () => {
 
       if (profileError) throw profileError;
 
-      // Update students table
       const { error: studentError } = await supabase
         .from('students')
         .update({
@@ -57,19 +52,14 @@ const StudentProfile = () => {
 
       if (studentError) throw studentError;
 
-      setSuccess('Profile updated!');
+      await refreshData();
+      setSuccess('Profile updated successfully!');
       setTimeout(() => setSuccess(''), 3000);
-      
     } catch (err) {
       setError(err.message || 'Update failed');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleLogout = async () => {
-    await signOut();
-    navigate('/login');
   };
 
   const departments = [
@@ -82,107 +72,138 @@ const StudentProfile = () => {
     'Business Administration'
   ];
 
-  const levels = ['100', '200', '300', '400', '500'];
-
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-6">My Profile</h1>
+    <div className="max-w-xl mx-auto px-6 py-12">
+      {/* Header Section */}
+      <div className="mb-10 text-center sm:text-left">
+        <h1 className="text-3xl font-black text-gray-900 tracking-tight">Account Settings</h1>
+        <p className="text-gray-500 mt-2 font-medium">Keep your academic information up to date.</p>
+      </div>
 
+      {/* Notifications */}
       {success && (
-        <div className="mb-4 bg-green-50 text-green-700 px-4 py-3 rounded-lg flex items-center gap-2">
-          <CheckCircle size={18} />
-          <span>{success}</span>
+        <div className="mb-6 bg-emerald-50 text-emerald-700 p-4 rounded-2xl flex items-center gap-3 border border-emerald-100 animate-in fade-in slide-in-from-top-2">
+          <CheckCircle size={20} className="text-emerald-500" />
+          <span className="font-bold text-sm">{success}</span>
         </div>
       )}
 
       {error && (
-        <div className="mb-4 bg-red-50 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
-          <AlertCircle size={18} />
-          <span>{error}</span>
+        <div className="mb-6 bg-rose-50 text-rose-700 p-4 rounded-2xl flex items-center gap-3 border border-rose-100 animate-in fade-in slide-in-from-top-2">
+          <AlertCircle size={20} className="text-rose-500" />
+          <span className="font-bold text-sm">{error}</span>
         </div>
       )}
 
-      <div className="bg-white rounded-2xl shadow-sm border p-6 space-y-6">
-        {/* Email - Read Only */}
-        <div>
-          <label className="text-sm font-medium text-gray-600">Email</label>
-          <div className="flex items-center gap-2 mt-1 p-3 bg-gray-50 rounded-lg text-gray-500">
-            <Mail size={18} />
-            <span>{email}</span>
-          </div>
-        </div>
+      <div className="space-y-8">
+        {/* Section: Personal Info */}
+        <section className="space-y-4">
+          <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 px-1">Personal Details</h2>
+          
+          <div className="space-y-4">
+            {/* Email - Read Only */}
+            <div className="group">
+              <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2 ml-1">Email Address (Fixed)</label>
+              <div className="flex items-center gap-3 p-4 bg-gray-50 border border-gray-100 rounded-2xl text-gray-400 transition-all">
+                <Mail size={18} strokeWidth={2.5} />
+                <span className="text-sm font-bold">{email}</span>
+              </div>
+            </div>
 
-        {/* Full Name */}
-        <div>
-          <label className="text-sm font-medium text-gray-600">Full Name</label>
-          <div className="flex items-center gap-2 mt-1">
-            <User size={18} className="text-gray-400" />
-            <input
-              type="text"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              className="flex-1 p-3 bg-gray-50 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-            />
+            {/* Full Name */}
+            <div className="group">
+              <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2 ml-1">Full Name</label>
+              <div className="relative flex items-center">
+                <User className="absolute left-4 text-gray-400" size={18} strokeWidth={2.5} />
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Enter your full name"
+                  className="w-full pl-12 pr-4 py-4 bg-white border border-gray-200 rounded-2xl text-sm font-bold focus:border-gray-900 focus:ring-4 focus:ring-gray-50 outline-none transition-all"
+                />
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
 
-        {/* Matric Number */}
-        <div>
-          <label className="text-sm font-medium text-gray-600">Matric Number</label>
-          <div className="flex items-center gap-2 mt-1">
-            <Hash size={18} className="text-gray-400" />
-            <input
-              type="text"
-              value={matricNo}
-              onChange={(e) => setMatricNo(e.target.value)}
-              className="flex-1 p-3 bg-gray-50 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase"
-              placeholder="e.g., CS2024001"
-            />
+        {/* Section: Academic Info */}
+        <section className="space-y-4 pt-4">
+          <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 px-1">Academic Info</h2>
+          
+          <div className="space-y-4">
+            {/* Matric No */}
+            <div className="group">
+              <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2 ml-1">Matric Number</label>
+              <div className="relative flex items-center">
+                <Hash className="absolute left-4 text-gray-400" size={18} strokeWidth={2.5} />
+                <input
+                  type="text"
+                  value={matricNo}
+                  onChange={(e) => setMatricNo(e.target.value)}
+                  placeholder="e.g. CS2024001"
+                  className="w-full pl-12 pr-4 py-4 bg-white border border-gray-200 rounded-2xl text-sm font-bold focus:border-gray-900 focus:ring-4 focus:ring-gray-50 outline-none transition-all uppercase"
+                />
+              </div>
+            </div>
+
+            {/* Department */}
+            <div className="group">
+              <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2 ml-1">Department</label>
+              <div className="relative flex items-center">
+                <BookOpen className="absolute left-4 text-gray-400 pointer-events-none" size={18} strokeWidth={2.5} />
+                <select
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                  className="w-full pl-12 pr-10 py-4 bg-white border border-gray-200 rounded-2xl text-sm font-bold focus:border-gray-900 focus:ring-4 focus:ring-gray-50 outline-none transition-all appearance-none"
+                >
+                  <option value="">Choose Department</option>
+                  {departments.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <ChevronDown className="absolute right-4 text-gray-400 pointer-events-none" size={16} />
+              </div>
+            </div>
+
+            {/* Level */}
+            <div className="group">
+              <label className="block text-[11px] font-black uppercase tracking-widest text-gray-400 mb-2 ml-1">Level / Year</label>
+              <div className="grid grid-cols-5 gap-2">
+                {['100', '200', '300', '400', '500'].map((l) => (
+                  <button
+                    key={l}
+                    type="button"
+                    onClick={() => setLevel(l)}
+                    className={`py-3 rounded-xl text-xs font-black transition-all border ${
+                      level === l 
+                        ? 'bg-gray-900 text-white border-gray-900 shadow-lg shadow-gray-200' 
+                        : 'bg-white text-gray-400 border-gray-100 hover:border-gray-300'
+                    }`}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
 
-        {/* Department */}
-        <div>
-          <label className="text-sm font-medium text-gray-600">Department</label>
-          <select
-            value={department}
-            onChange={(e) => setDepartment(e.target.value)}
-            className="w-full mt-1 p-3 bg-gray-50 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+        {/* Action Area */}
+        <div className="pt-8 space-y-4">
+          <button
+            onClick={handleUpdateProfile}
+            disabled={loading}
+            className="w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] hover:bg-indigo-600 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-3 shadow-xl shadow-gray-100"
           >
-            <option value="">Select Department</option>
-            {departments.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
-        </div>
+            {loading ? 'Saving Changes...' : <><Save size={16} /> Save My Profile</>}
+          </button>
 
-        {/* Level */}
-        <div>
-          <label className="text-sm font-medium text-gray-600">Level</label>
-          <select
-            value={level}
-            onChange={(e) => setLevel(e.target.value)}
-            className="w-full mt-1 p-3 bg-gray-50 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+          <button
+            onClick={async () => { await signOut(); navigate('/login'); }}
+            className="w-full bg-white text-rose-500 border border-rose-50 py-4 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] hover:bg-rose-50 transition-all active:scale-95 flex items-center justify-center gap-3"
           >
-            <option value="">Select Level</option>
-            {levels.map(l => <option key={l} value={l}>{l}</option>)}
-          </select>
+            <LogOut size={16} /> Sign Out
+          </button>
         </div>
-
-        {/* Save Button */}
-        <button
-          onClick={handleUpdateProfile}
-          disabled={loading}
-          className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-        >
-          {loading ? 'Saving...' : <><Save size={18} /> Save Changes</>}
-        </button>
-
-        {/* Logout */}
-        <button
-          onClick={handleLogout}
-          className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
-        >
-          <LogOut size={18} /> Sign Out
-        </button>
       </div>
     </div>
   );

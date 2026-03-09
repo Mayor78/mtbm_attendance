@@ -1,136 +1,140 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../../lib/supabase';
 import { 
   BookOpen, Clock, ChevronRight, Activity, X, 
-  Calendar, CheckCircle, AlertCircle, BarChart2,
-  TrendingUp, TrendingDown, Target, Users
+  Calendar, AlertCircle, TrendingUp, TrendingDown, Users
 } from 'lucide-react';
 
+// Query keys
+const queryKeys = {
+  student: (userId) => ['student', userId],
+  courses: (studentId, department, level) => ['courses', studentId, department, level],
+  activeSessions: (courseIds) => ['activeSessions', courseIds],
+  attendanceStats: (studentId, courseIds) => ['attendanceStats', studentId, courseIds],
+  courseDetails: (courseId, studentId) => ['courseDetails', courseId, studentId],
+};
+
 const EnrolledCourses = ({ userId }) => {
-  const [courses, setCourses] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [studentInfo, setStudentInfo] = useState(null);
-  const [activeSessions, setActiveSessions] = useState({});
-  const [attendanceStats, setAttendanceStats] = useState({});
   const [selectedCourse, setSelectedCourse] = useState(null);
-  const [courseDetails, setCourseDetails] = useState(null);
   const [showModal, setShowModal] = useState(false);
-  const [modalLoading, setModalLoading] = useState(false);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    fetchStudentAndCourses();
-  }, [userId]);
-
-  const fetchStudentAndCourses = async () => {
-    try {
-      // Get student info
-      const { data: student, error: studentError } = await supabase
+  // Fetch student info
+  const { data: studentInfo, isLoading: studentLoading } = useQuery({
+    queryKey: queryKeys.student(userId),
+    queryFn: async () => {
+      const { data, error } = await supabase
         .from('students')
         .select('id, department, level, full_name, matric_no')
         .eq('user_id', userId)
         .single();
 
-      if (studentError) throw studentError;
-      setStudentInfo(student);
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!userId,
+    staleTime: 10 * 60 * 1000, // 10 minutes
+  });
 
-      // Get courses for this student's department and level
-      const { data: availableCourses, error: coursesError } = await supabase
+  // Fetch courses
+  const { data: courses = [], isLoading: coursesLoading } = useQuery({
+    queryKey: queryKeys.courses(userId, studentInfo?.department, studentInfo?.level),
+    queryFn: async () => {
+      const { data, error } = await supabase
         .from('courses')
         .select('id, course_code, course_title, department, level, semester')
-        .eq('department', student.department)
-        .eq('level', student.level)
+        .eq('department', studentInfo.department)
+        .eq('level', studentInfo.level)
         .order('course_code');
 
-      if (coursesError) throw coursesError;
-      setCourses(availableCourses || []);
-      
-      if (availableCourses && availableCourses.length > 0) {
-        await Promise.all([
-          checkActiveSessions(availableCourses),
-          fetchAttendanceStats(student.id, availableCourses)
-        ]);
-      }
-    } catch (error) {
-      console.error('Error fetching courses:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!studentInfo,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
 
-  const checkActiveSessions = async (coursesList) => {
-    const sessions = {};
-    for (const course of coursesList) {
-      const { data } = await supabase
-        .from('attendance_sessions')
-        .select('id, expires_at, start_time')
-        .eq('course_id', course.id)
-        .eq('is_active', true)
-        .gt('expires_at', new Date().toISOString())
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      
-      if (data) {
-        sessions[course.id] = data;
-      }
-    }
-    setActiveSessions(sessions);
-  };
-
-  const fetchAttendanceStats = async (studentId, coursesList) => {
-    const stats = {};
-    
-    for (const course of coursesList) {
-      // Get all sessions for this course
-      const { data: sessions, error: sessionsError } = await supabase
-        .from('attendance_sessions')
-        .select('id')
-        .eq('course_id', course.id);
-
-      if (sessionsError) {
-        console.error('Error fetching sessions:', sessionsError);
-        continue;
-      }
-
-      const totalSessions = sessions?.length || 0;
-      const sessionIds = sessions?.map(s => s.id) || [];
-
-      // Get student's attendance records for these sessions
-      let presentCount = 0;
-
-      if (sessionIds.length > 0) {
-        const { data: attendance, error: attendanceError } = await supabase
-          .from('attendance_records')
-          .select('id')
-          .eq('student_id', studentId)
-          .in('session_id', sessionIds);
-
-        if (attendanceError) {
-          console.error('Error fetching attendance:', attendanceError);
-        } else {
-          presentCount = attendance?.length || 0;
+  // Fetch active sessions
+  const { data: activeSessions = {} } = useQuery({
+    queryKey: queryKeys.activeSessions(courses.map(c => c.id)),
+    queryFn: async () => {
+      const sessions = {};
+      for (const course of courses) {
+        const { data } = await supabase
+          .from('attendance_sessions')
+          .select('id, expires_at, start_time')
+          .eq('course_id', course.id)
+          .eq('is_active', true)
+          .gt('expires_at', new Date().toISOString())
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        
+        if (data) {
+          sessions[course.id] = data;
         }
       }
-      
-      const absentCount = totalSessions - presentCount;
-      const attendanceRate = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 0;
-      
-      stats[course.id] = {
-        totalSessions,
-        presentCount,
-        absentCount,
-        attendanceRate
-      };
-    }
-    
-    setAttendanceStats(stats);
-  };
+      return sessions;
+    },
+    enabled: courses.length > 0,
+    refetchInterval: 30000, // Refetch every 30 seconds
+    staleTime: 0,
+  });
 
-  const fetchCourseDetails = async (course) => {
-    setModalLoading(true);
-    try {
+  // Fetch attendance stats
+  const { data: attendanceStats = {} } = useQuery({
+    queryKey: queryKeys.attendanceStats(studentInfo?.id, courses.map(c => c.id)),
+    queryFn: async () => {
+      const stats = {};
+      
+      for (const course of courses) {
+        // Get all sessions for this course
+        const { data: sessions } = await supabase
+          .from('attendance_sessions')
+          .select('id')
+          .eq('course_id', course.id);
+
+        const totalSessions = sessions?.length || 0;
+        const sessionIds = sessions?.map(s => s.id) || [];
+
+        // Get student's attendance records
+        let presentCount = 0;
+        if (sessionIds.length > 0) {
+          const { data: attendance } = await supabase
+            .from('attendance_records')
+            .select('id')
+            .eq('student_id', studentInfo.id)
+            .in('session_id', sessionIds);
+
+          presentCount = attendance?.length || 0;
+        }
+        
+        const absentCount = totalSessions - presentCount;
+        const attendanceRate = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 0;
+        
+        stats[course.id] = {
+          totalSessions,
+          presentCount,
+          absentCount,
+          attendanceRate
+        };
+      }
+      
+      return stats;
+    },
+    enabled: !!studentInfo && courses.length > 0,
+    staleTime: 2 * 60 * 1000, // 2 minutes
+  });
+
+  // Fetch course details for modal
+  const { data: courseDetails, isLoading: modalLoading } = useQuery({
+    queryKey: queryKeys.courseDetails(selectedCourse?.id, studentInfo?.id),
+    queryFn: async () => {
+      if (!selectedCourse || !studentInfo) return null;
+
       // Get all sessions for this course
-      const { data: sessions, error: sessionsError } = await supabase
+      const { data: sessions } = await supabase
         .from('attendance_sessions')
         .select(`
           id,
@@ -138,19 +142,16 @@ const EnrolledCourses = ({ userId }) => {
           created_at,
           is_active
         `)
-        .eq('course_id', course.id)
+        .eq('course_id', selectedCourse.id)
         .order('created_at', { ascending: false });
 
-      if (sessionsError) throw sessionsError;
-
       // Get student's attendance for each session
-      const studentId = studentInfo?.id;
       const sessionsWithAttendance = await Promise.all((sessions || []).map(async (session) => {
         const { data: record } = await supabase
           .from('attendance_records')
           .select('id, scanned_at')
           .eq('session_id', session.id)
-          .eq('student_id', studentId)
+          .eq('student_id', studentInfo.id)
           .maybeSingle();
 
         return {
@@ -164,42 +165,33 @@ const EnrolledCourses = ({ userId }) => {
       const recentSessions = sessionsWithAttendance.slice(0, 5);
       const recentPresent = recentSessions.filter(s => s.isPresent).length;
       const recentRate = recentSessions.length > 0 ? Math.round((recentPresent / recentSessions.length) * 100) : 0;
-      const overallRate = attendanceStats[course.id]?.attendanceRate || 0;
+      const overallRate = attendanceStats[selectedCourse.id]?.attendanceRate || 0;
       const trend = recentRate > overallRate ? 'up' : recentRate < overallRate ? 'down' : 'stable';
 
-      setCourseDetails({
-        ...course,
+      return {
+        ...selectedCourse,
         sessions: sessionsWithAttendance,
         recentRate,
         trend
-      });
-    } catch (error) {
-      console.error('Error fetching course details:', error);
-    } finally {
-      setModalLoading(false);
-    }
-  };
+      };
+    },
+    enabled: !!selectedCourse && !!studentInfo,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
 
   const handleCourseClick = (course) => {
     setSelectedCourse(course);
-    fetchCourseDetails(course);
     setShowModal(true);
   };
 
   const getTimeRemaining = (expiresAt) => {
-    if (!expiresAt) return 'No session';
+    if (!expiresAt) return '';
     const now = new Date();
     const expiry = new Date(expiresAt);
     const diffMs = expiry - now;
     if (diffMs <= 0) return 'Expired';
     const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const remainingMins = diffMins % 60;
-    
-    if (diffHours > 0) {
-      return `${diffHours}h ${remainingMins}m left`;
-    }
-    return `${diffMins}m left`;
+    return diffMins < 60 ? `${diffMins}m` : `${Math.floor(diffMins / 60)}h`;
   };
 
   const formatDate = (dateString) => {
@@ -212,17 +204,13 @@ const EnrolledCourses = ({ userId }) => {
     });
   };
 
-  const sortedCourses = [...courses].sort((a, b) => {
-    const aLive = activeSessions[a.id] ? 1 : 0;
-    const bLive = activeSessions[b.id] ? 1 : 0;
-    return bLive - aLive; 
-  });
-
-  if (loading) return (
-    <div className="flex justify-center py-8">
-      <div className="w-6 h-6 border-2 border-gray-200 border-t-indigo-600 rounded-full animate-spin"></div>
-    </div>
-  );
+  if (studentLoading || coursesLoading) {
+    return (
+      <div className="flex justify-center py-8">
+        <div className="w-6 h-6 border-2 border-gray-200 border-t-gray-900 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   if (courses.length === 0) {
     return (
@@ -233,9 +221,15 @@ const EnrolledCourses = ({ userId }) => {
     );
   }
 
+  const sortedCourses = [...courses].sort((a, b) => {
+    const aLive = activeSessions[a.id] ? 1 : 0;
+    const bLive = activeSessions[b.id] ? 1 : 0;
+    return bLive - aLive; 
+  });
+
   return (
     <>
-      <div className="divide-y divide-gray-50">
+      <div className="divide-y divide-gray-100">
         {sortedCourses.map((course) => {
           const isLive = !!activeSessions[course.id];
           const stats = attendanceStats[course.id];
@@ -244,67 +238,54 @@ const EnrolledCourses = ({ userId }) => {
             <div 
               key={course.id} 
               onClick={() => handleCourseClick(course)}
-              className="group flex items-center justify-between p-4 hover:bg-gray-50 transition-all cursor-pointer"
+              className="flex items-center justify-between p-3 hover:bg-gray-50 cursor-pointer transition-colors"
             >
-              <div className="flex items-center gap-4">
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-colors ${isLive ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-50 text-gray-400'}`}>
-                  {isLive ? <Activity size={20} className="animate-pulse" /> : <BookOpen size={20} />}
+              <div className="flex items-center gap-3 min-w-0">
+                {/* Icon */}
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                  isLive ? 'bg-green-50 text-green-600' : 'bg-gray-50 text-gray-400'
+                }`}>
+                  {isLive ? <Activity size={16} /> : <BookOpen size={16} />}
                 </div>
 
-                <div>
+                {/* Course Info */}
+                <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <h4 className="text-sm font-black text-gray-900 uppercase tracking-tight">
+                    <span className="text-sm font-medium text-gray-900 truncate">
                       {course.course_code}
-                    </h4>
+                    </span>
                     {isLive && (
-                      <span className="flex items-center gap-1 text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full tracking-widest uppercase">
-                        <span className="w-1 h-1 bg-emerald-600 rounded-full animate-ping" />
+                      <span className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-600 rounded-full whitespace-nowrap">
                         Live
                       </span>
                     )}
                   </div>
-                  <p className="text-xs font-medium text-gray-400 line-clamp-1 max-w-[180px] sm:max-w-xs">
+                  <p className="text-xs text-gray-400 truncate max-w-[150px] sm:max-w-xs">
                     {course.course_title}
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-6">
-                <div className="hidden sm:flex flex-col items-end">
-                  {stats ? (
-                    <>
-                      <span className={`text-xs font-black ${
-                        stats.attendanceRate >= 75 ? 'text-green-600' : 
-                        stats.attendanceRate > 0 ? 'text-orange-500' : 
-                        'text-gray-400'
-                      }`}>
-                        {stats.attendanceRate}%
-                      </span>
-                      <span className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">
-                        {stats.presentCount}/{stats.totalSessions} sessions
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-xs font-black text-gray-300">0%</span>
-                      <span className="text-[9px] font-bold text-gray-200 uppercase tracking-widest">
-                        No data
-                      </span>
-                    </>
-                  )}
-                </div>
+              <div className="flex items-center gap-3">
+                {/* Attendance Rate */}
+                {stats && (
+                  <span className={`text-xs font-medium ${
+                    stats.attendanceRate >= 75 ? 'text-green-600' : 
+                    stats.attendanceRate > 0 ? 'text-orange-500' : 
+                    'text-gray-300'
+                  }`}>
+                    {stats.attendanceRate}%
+                  </span>
+                )}
 
-                <div className="flex items-center">
-                  {isLive ? (
-                    <div className="flex flex-col items-end bg-emerald-600 px-3 py-1 rounded-xl shadow-lg shadow-emerald-100">
-                      <span className="text-[10px] font-black text-white whitespace-nowrap">
-                        {getTimeRemaining(activeSessions[course.id]?.expires_at)}
-                      </span>
-                    </div>
-                  ) : (
-                    <ChevronRight size={18} className="text-gray-200 group-hover:text-gray-900 group-hover:translate-x-1 transition-all" />
-                  )}
-                </div>
+                {/* Live Timer or Arrow */}
+                {isLive ? (
+                  <span className="text-xs text-green-600 whitespace-nowrap">
+                    {getTimeRemaining(activeSessions[course.id]?.expires_at)}
+                  </span>
+                ) : (
+                  <ChevronRight size={16} className="text-gray-300" />
+                )}
               </div>
             </div>
           );
@@ -313,86 +294,101 @@ const EnrolledCourses = ({ userId }) => {
 
       {/* Course Details Modal */}
       {showModal && selectedCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowModal(false)}>
-          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/20" onClick={() => setShowModal(false)}>
+          <div className="bg-white rounded-xl max-w-md w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
             <div className="sticky top-0 bg-white border-b border-gray-100 p-4 flex justify-between items-center">
               <div>
-                <h3 className="font-bold text-gray-900">{selectedCourse.course_code}</h3>
-                <p className="text-xs text-gray-500">{selectedCourse.course_title}</p>
+                <h3 className="font-medium text-gray-900">{selectedCourse.course_code}</h3>
+                <p className="text-xs text-gray-400">{selectedCourse.course_title}</p>
               </div>
-              <button 
-                onClick={() => setShowModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <X size={18} />
+              <button onClick={() => setShowModal(false)} className="p-1 text-gray-400 hover:text-gray-600">
+                <X size={16} />
               </button>
             </div>
 
-            {modalLoading ? (
-              <div className="p-8 text-center">
-                <div className="w-8 h-8 border-2 border-gray-100 border-t-indigo-600 rounded-full animate-spin mx-auto"></div>
-              </div>
-            ) : courseDetails && (
-              <div className="p-4 space-y-4">
-                {/* Quick Stats */}
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="bg-emerald-50 p-3 rounded-xl text-center">
-                    <p className="text-2xl font-black text-emerald-600">
-                      {attendanceStats[selectedCourse.id]?.presentCount || 0}
-                    </p>
-                    <p className="text-[10px] font-bold text-emerald-400 uppercase">Present</p>
-                  </div>
-                  <div className="bg-red-50 p-3 rounded-xl text-center">
-                    <p className="text-2xl font-black text-red-600">
-                      {attendanceStats[selectedCourse.id]?.absentCount || 0}
-                    </p>
-                    <p className="text-[10px] font-bold text-red-400 uppercase">Absent</p>
-                  </div>
-                  <div className="bg-gray-50 p-3 rounded-xl text-center">
-                    <p className="text-2xl font-black text-gray-600">
-                      {attendanceStats[selectedCourse.id]?.totalSessions || 0}
-                    </p>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase">Total</p>
-                  </div>
+            {/* Content */}
+            <div className="p-4 space-y-4">
+              {modalLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="w-6 h-6 border-2 border-gray-200 border-t-gray-900 rounded-full animate-spin"></div>
                 </div>
-
-                {/* Overall Attendance */}
-                <div className="bg-gray-50 p-4 rounded-xl">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs font-bold text-gray-500 uppercase">Overall Attendance</span>
-                    <span className="text-2xl font-black text-gray-900">
-                      {attendanceStats[selectedCourse.id]?.attendanceRate || 0}%
-                    </span>
+              ) : courseDetails && (
+                <>
+                  {/* Stats */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="bg-green-50 p-2 rounded-lg text-center">
+                      <p className="text-lg font-semibold text-green-600">
+                        {attendanceStats[selectedCourse.id]?.presentCount || 0}
+                      </p>
+                      <p className="text-[10px] text-green-500">Present</p>
+                    </div>
+                    <div className="bg-red-50 p-2 rounded-lg text-center">
+                      <p className="text-lg font-semibold text-red-600">
+                        {attendanceStats[selectedCourse.id]?.absentCount || 0}
+                      </p>
+                      <p className="text-[10px] text-red-500">Absent</p>
+                    </div>
+                    <div className="bg-gray-50 p-2 rounded-lg text-center">
+                      <p className="text-lg font-semibold text-gray-600">
+                        {attendanceStats[selectedCourse.id]?.totalSessions || 0}
+                      </p>
+                      <p className="text-[10px] text-gray-400">Total</p>
+                    </div>
                   </div>
-                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-indigo-600 rounded-full"
-                      style={{ width: `${attendanceStats[selectedCourse.id]?.attendanceRate || 0}%` }}
-                    />
-                  </div>
-                </div>
 
-                {/* Session History */}
-                <div className="bg-gray-50 p-4 rounded-xl">
-                  <h4 className="text-xs font-bold text-gray-500 uppercase mb-3">Session History</h4>
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {courseDetails.sessions.map((session) => (
-                      <div key={session.id} className="flex items-center justify-between p-2 bg-white rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${session.isPresent ? 'bg-green-500' : 'bg-red-500'}`} />
-                          <span className="text-xs text-gray-600">
-                            {formatDate(session.start_time)}
+                  {/* Attendance Progress */}
+                  <div className="bg-gray-50 p-3 rounded-lg">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-xs text-gray-500">Attendance</span>
+                      <span className="text-sm font-medium text-gray-900">
+                        {attendanceStats[selectedCourse.id]?.attendanceRate || 0}%
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-gray-900 rounded-full"
+                        style={{ width: `${attendanceStats[selectedCourse.id]?.attendanceRate || 0}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Recent Trend */}
+                  <div className="bg-gray-50 p-3 rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Last 5 sessions</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-900">
+                          {courseDetails.recentRate}%
+                        </span>
+                        {courseDetails.trend === 'up' && <TrendingUp size={14} className="text-green-500" />}
+                        {courseDetails.trend === 'down' && <TrendingDown size={14} className="text-red-500" />}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Session History */}
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-gray-500">Session History</p>
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {courseDetails.sessions.map((session) => (
+                        <div key={session.id} className="flex items-center justify-between py-1.5 px-2 bg-gray-50 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-1.5 h-1.5 rounded-full ${session.isPresent ? 'bg-green-500' : 'bg-red-500'}`} />
+                            <span className="text-xs text-gray-600">
+                              {formatDate(session.start_time)}
+                            </span>
+                          </div>
+                          <span className={`text-xs ${session.isPresent ? 'text-green-600' : 'text-red-600'}`}>
+                            {session.isPresent ? 'Present' : 'Absent'}
                           </span>
                         </div>
-                        <span className={`text-xs font-medium ${session.isPresent ? 'text-green-600' : 'text-red-600'}`}>
-                          {session.isPresent ? 'Present' : 'Absent'}
-                        </span>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </div>
-            )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}

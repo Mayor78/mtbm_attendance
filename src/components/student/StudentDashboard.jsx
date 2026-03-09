@@ -94,34 +94,23 @@ const StudentDashboard = () => {
       </header>
 
       {/* Stats Section */}
-      <section className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <QuickStat 
-          label="Attendance" 
-          value={`${stats.percentage}%`} 
-          sub="Overall average"
-          icon={<CheckCircle2 className="text-emerald-600" />}
-          theme="emerald"
-        />
-        <QuickStat 
-          label="Present" 
-          value={stats.attended} 
-          sub="Classes attended"
-          icon={<LayoutDashboard className="text-blue-600" />}
-          theme="blue"
-        />
-        <div className="col-span-2 md:col-span-1">
-          <QuickStat 
-            label="Total Classes" 
-            value={stats.totalClasses} 
-            sub="Semester sessions"
-            icon={<BookOpen className="text-indigo-600" />}
-            theme="indigo"
-          />
+      <section className="">
+      {/* Right Column: Recent History */}
+        <div className="lg:col-span-2 space-y-6">
+          <div className="flex items-center justify-between px-2">
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <History size={20} className="text-indigo-600" />
+              Recent Activity
+            </h2>
+          </div>
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-4 sm:p-6">
+            <AttendanceHistory records={records} loading={loading} />
+          </div>
         </div>
       </section>
 
       {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+      <div className="">
         {/* Left Column: Courses */}
         <div className="lg:col-span-3 space-y-6">
           <div className="flex items-center justify-between px-2">
@@ -135,18 +124,7 @@ const StudentDashboard = () => {
           </div>
         </div>
 
-        {/* Right Column: Recent History */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="flex items-center justify-between px-2">
-            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <History size={20} className="text-indigo-600" />
-              Recent Activity
-            </h2>
-          </div>
-          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-4 sm:p-6">
-            <AttendanceHistory records={records} loading={loading} />
-          </div>
-        </div>
+      
       </div>
 
       {/* Modals & Alerts */}

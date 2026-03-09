@@ -163,112 +163,113 @@ export const HocDashboard = () => {
     }
   };
 
-  const startSession = async () => {
-    if (!selectedCourse) return;
+ const startSession = async (durationMinutes) => {
+  if (!selectedCourse) return;
+  
+  try {
+    setError('');
+    setIsCreatingSession(true);
+
+    const hocLocation = await getCurrentLocation();
     
-    try {
-      setError('');
-      setIsCreatingSession(true);
+    if (!hocLocation) {
+      throw new Error('Cannot create session without location. Please enable GPS to set the attendance boundary.');
+    }
 
-      const hocLocation = await getCurrentLocation();
-      
-      if (!hocLocation) {
-        throw new Error('Cannot create session without location. Please enable GPS to set the attendance boundary.');
-      }
+    // Verify course matches HOC's department and level
+    const course = courses.find(c => c.id === selectedCourse);
+    
+    if (course.department !== hocInfo?.department) {
+      throw new Error(`You can only create sessions for ${hocInfo?.department} department courses.`);
+    }
 
-      // Verify course matches HOC's department and level
+    if (course.level !== hocInfo?.level) {
+      throw new Error(`You can only create sessions for ${hocInfo?.level} level courses.`);
+    }
+    
+    const token = crypto.randomUUID();
+    const numeric_code = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Set expiry based on selected duration
+    const durationMs = durationMinutes * 60 * 1000;
+    const expires_at = new Date(Date.now() + durationMs).toISOString();
+    
+    const sessionData = {
+      course_id: selectedCourse,
+      created_by: user.id,
+      token: token,
+      start_time: new Date().toISOString(),
+      expires_at: expires_at,
+      is_active: true,
+      numeric_code: numeric_code,
+      allowed_location_lat: hocLocation.lat,
+      allowed_location_lng: hocLocation.lng,
+      allowed_radius_meters: 500,
+      strict_location: true
+    };
+    
+    const data = await api.createSession(sessionData);
+
+    if (data) {
       const course = courses.find(c => c.id === selectedCourse);
       
-      if (course.department !== hocInfo?.department) {
-        throw new Error(`You can only create sessions for ${hocInfo?.department} department courses.`);
-      }
+      setSuccess(`Session started for ${durationMinutes} minutes at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
+      
+      setNewSession({ 
+        ...data, 
+        course_code: course?.course_code, 
+        course_title: course?.course_title,
+        location: hocLocation,
+        duration: durationMinutes
+      });
+      
+      // Update active sessions
+      setActiveSessions(prev => ({
+        ...prev,
+        [selectedCourse]: data
+      }));
+      
+      setShowQRModal(true);
+      setShowSessionModal(false);
+      refetch();
 
-      if (course.level !== hocInfo?.level) {
-        throw new Error(`You can only create sessions for ${hocInfo?.level} level courses.`);
-      }
-      
-      const token = crypto.randomUUID();
-      const numeric_code = Math.floor(100000 + Math.random() * 900000).toString();
-      
-      // Set expiry to 1 hour from now
-      const ONE_HOUR = 60 * 60 * 1000;
-      const expires_at = new Date(Date.now() + ONE_HOUR).toISOString();
-      
-      const sessionData = {
-        course_id: selectedCourse,
-        created_by: user.id,
-        token: token,
-        start_time: new Date().toISOString(),
-        expires_at: expires_at,
-        is_active: true,
-        numeric_code: numeric_code,
-        allowed_location_lat: hocLocation.lat,
-        allowed_location_lng: hocLocation.lng,
-        allowed_radius_meters: 500,
-        strict_location: true
-      };
-      
-      const data = await api.createSession(sessionData);
-
-      if (data) {
-        const course = courses.find(c => c.id === selectedCourse);
-        
-        setSuccess(`Session started for 1 hour at ${hocLocation.address || 'your location'} (${Math.round(hocLocation.accuracy)}m accuracy)`);
-        
-        setNewSession({ 
-          ...data, 
-          course_code: course?.course_code, 
-          course_title: course?.course_title,
-          location: hocLocation
-        });
-        
-        // Update active sessions
-        setActiveSessions(prev => ({
-          ...prev,
-          [selectedCourse]: data
-        }));
-        
-        setShowQRModal(true);
-        setShowSessionModal(false);
-        refetch();
-
-        // Auto-end session after 1 hour
-        setTimeout(() => {
-          autoEndSession(data.id);
-        }, ONE_HOUR);
-      }
-    } catch (error) { 
-      console.error('Start session error:', error);
-      setError(error.message || 'Failed to start session.'); 
-    } finally {
-      setIsCreatingSession(false);
+      // Auto-end session after selected duration
+      setTimeout(() => {
+        autoEndSession(data.id);
+      }, durationMs);
     }
-  };
+  } catch (error) { 
+    console.error('Start session error:', error);
+    setError(error.message || 'Failed to start session.'); 
+  } finally {
+    setIsCreatingSession(false);
+  }
+};
 
-  const autoEndSession = async (sessionId) => {
-    try {
-      console.log('⏰ Auto-ending session:', sessionId);
+ const autoEndSession = async (sessionId) => {
+  try {
+    console.log('⏰ Auto-ending session:', sessionId);
+    
+    // Check if session is still active before ending
+    const { data: session } = await supabase
+      .from('attendance_sessions')
+      .select('is_active')
+      .eq('id', sessionId)
+      .single();
+
+    if (session && session.is_active) {
+      await api.endSession(sessionId);
+      console.log('✅ Session auto-ended successfully');
       
-      // Check if session is still active before ending
-      const { data: session } = await supabase
-        .from('attendance_sessions')
-        .select('is_active')
-        .eq('id', sessionId)
-        .single();
-
-      if (session && session.is_active) {
-        await api.endSession(sessionId);
-        console.log('✅ Session auto-ended successfully');
-        
-        // Refresh active sessions
-        checkActiveSessions();
-        refetch();
-        setSuccess('Session ended automatically (1 hour elapsed)');
-      }
-    } catch (error) {
-      console.error('Error auto-ending session:', error);
+      // Refresh active sessions
+      checkActiveSessions();
+      refetch();
+      setSuccess('Session ended automatically');
     }
-  };
+  } catch (error) {
+    console.error('Error auto-ending session:', error);
+  }
+};
 
   const endSession = async (id) => {
     try {
@@ -308,7 +309,7 @@ export const HocDashboard = () => {
   if (loading) return <AttendanceSkeleton />;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-24 text-slate-900 space-y-8">
+    <div className="max-w-7xl mx-auto px-1 sm:px-2 lg:px-4  pb-24 text-slate-900 space-y-8">
       
       {/* Header with HOC Info */}
       <HOCHeader

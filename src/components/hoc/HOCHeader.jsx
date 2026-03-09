@@ -3,36 +3,50 @@ import { Calendar, Plus, QrCode } from 'lucide-react';
 import ManualAttendanceButton from './ManualAttendanceButton';
 
 const HOCHeader = ({ profile, onNewCourse, onStartSession, onManualAttendance }) => {
+  // --- GREETING LOGIC ---
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  };
+
   return (
-    <header className="relative overflow-hidden bg-white border border-slate-200 p-6 rounded-[2rem] shadow-sm">
-      <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+    <header className="py-8 px-4 sm:px-2 border-b border-gray-100 mb-10">
+      <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-end justify-between gap-8">
+        
+        {/* Left: Identity & Date */}
         <div className="space-y-1">
-          <h1 className="text-2xl md:text-3xl font-black tracking-tight text-slate-800">
-            Welcome, <span className="text-indigo-600">{profile?.full_name?.split(' ')[0] || 'HOC'}</span>
+          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">
+            <Calendar size={12} strokeWidth={2.5} />
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-black text-gray-900 tracking-tight">
+            {getGreeting()}, {profile?.full_name?.split(' ')[0] || 'HOC'}.
           </h1>
-          <p className="text-slate-500 text-sm font-medium flex items-center gap-2">
-            <Calendar size={14} className="text-indigo-400" />
-            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-          </p>
         </div>
         
-        <div className="flex flex-wrap gap-3">
+        {/* Right: Actions */}
+        <div className="flex flex-wrap items-center gap-3">
           <ManualAttendanceButton onClick={onManualAttendance} />
+          
           <button
             onClick={onNewCourse}
-            className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 px-5 py-3 rounded-2xl text-sm font-bold text-slate-700 hover:bg-slate-100 transition-all"
+            className="group flex items-center justify-center gap-2 px-5 py-3.5 bg-white border border-gray-200 rounded-2xl text-[11px] font-black uppercase tracking-widest text-gray-500 hover:text-gray-900 hover:border-gray-900 transition-all active:scale-95"
           >
-            <Plus size={18} /> New Course
+            <Plus size={16} strokeWidth={2.5} />
+            New Course
           </button>
+
           <button
             onClick={onStartSession}
-            className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl text-sm font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 hover:-translate-y-0.5 transition-all"
+            className="flex items-center justify-center gap-2 px-6 py-3.5 bg-gray-900 text-white rounded-2xl text-[11px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all active:scale-95 shadow-xl shadow-gray-200"
           >
-            <QrCode size={18} /> Start Session
+            <QrCode size={16} strokeWidth={2.5} />
+            Start Session
           </button>
         </div>
       </div>
-      <div className="absolute -right-10 -top-10 w-40 h-40 bg-indigo-50 rounded-full blur-3xl opacity-50"></div>
     </header>
   );
 };
